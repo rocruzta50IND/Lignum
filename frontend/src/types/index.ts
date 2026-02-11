@@ -14,7 +14,7 @@ export interface Comment {
   createdAt: string;
 }
 
-// ESTA É A INTERFACE QUE O ERRO DIZ QUE ESTÁ FALTANDO
+// OBRIGATÓRIO: export interface Card
 export interface Card {
   id: string;
   columnId: string;

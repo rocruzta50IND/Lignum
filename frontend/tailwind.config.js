@@ -4,13 +4,14 @@ export default {
     "./index.html",
     "./src/**/*.{js,ts,jsx,tsx}",
   ],
+  // ADICIONE ESTA LINHA OBRIGATÓRIA:
+  darkMode: 'class', 
   theme: {
     extend: {
       fontFamily: {
         sans: ['Inter', 'sans-serif'],
       },
       colors: {
-        // Definição das cores para evitar erros de "unknown class"
         lignum: {
           bg: '#121212',
           panel: '#1E1E1E',
