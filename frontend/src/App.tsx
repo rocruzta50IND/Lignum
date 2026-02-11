@@ -1,88 +1,99 @@
-import React, { useState } from 'react';
+import React from 'react';
+import { BrowserRouter, Routes, Route, Navigate, Outlet, useParams, useNavigate } from 'react-router-dom';
 import { AuthProvider, useAuth } from './contexts/AuthContext';
+import { ThemeProvider } from './contexts/ThemeContext';
 import { Board } from './components/Kanban/Board';
 import { ChatSidebar } from './components/Chat/ChatSidebar';
+import { Dashboard } from './pages/Dashboard';
 import { Login } from './pages/Login';
 import { Register } from './pages/Register';
+import { Header } from './components/Header'; // Importe o Header Global
 
-const TEST_BOARD_ID = '8634798a-89ae-4600-837f-8a90404d0b27';
+// --- LAYOUT GLOBAL (Header + Conteúdo) ---
+const MainLayout = () => {
+    return (
+        // DESIGN: Usando as novas cores de fundo base
+        <div className="h-screen w-screen flex flex-col bg-[#F8FAFC] dark:bg-[#0F1117] transition-colors font-sans">
+            <Header /> 
+            <div className="flex-1 overflow-hidden relative flex">
+                <Outlet />
+            </div>
+        </div>
+    );
+};
 
-// Componente Interno para o Layout Logado
-const DashboardLayout = () => {
-  const { signOut, user } = useAuth();
+// --- LAYOUT ESPECÍFICO DO BOARD (Sidebar + Kanban) ---
+const BoardView = () => {
+  const { boardId } = useParams();
+  if (!boardId) return <Navigate to="/" />;
 
   return (
-    <div className="h-screen w-screen bg-lignum-bg flex overflow-hidden">
-      {/* Sidebar Chat */}
-      <div className="hidden md:flex h-full">
-        <ChatSidebar boardId={TEST_BOARD_ID} />
+    <div className="flex w-full h-full">
+      {/* Sidebar Chat: Largura fixa, borda sutil e cor de fundo de superfície */}
+      <div className="hidden md:flex h-full border-r border-gray-200/80 dark:border-gray-800/80 w-[320px] flex-shrink-0 bg-white dark:bg-[#16181D] relative z-10 shadow-sm">
+        <ChatSidebar boardId={boardId} />
       </div>
 
-      {/* Main Content */}
-      <main className="flex-1 flex flex-col h-full min-w-0 bg-lignum-bg">
-        <header className="h-14 border-b border-[#333] flex items-center px-6 bg-lignum-bg justify-between">
-          <div className="flex items-center gap-3">
-            <h1 className="text-lignum-text-primary font-semibold text-lg">
-              Lignum
-            </h1>
-            <span className="bg-[#2C2C2C] text-xs text-gray-400 px-2 py-0.5 rounded border border-[#333]">
-              Board: Desenvolvimento
-            </span>
-          </div>
-          
-          <div className="flex items-center gap-4">
-             <span className="text-sm text-gray-400 hidden sm:block">
-               Olá, <span className="text-white font-medium">{user?.name}</span>
-             </span>
-             <button 
-               onClick={signOut}
-               className="text-xs text-red-400 hover:text-red-300 border border-red-900/30 hover:bg-red-900/20 px-3 py-1.5 rounded transition-colors"
-             >
-               Sair
-             </button>
-          </div>
-        </header>
-        
-        <div className="flex-1 overflow-hidden relative">
-          <Board boardId={TEST_BOARD_ID} />
-        </div>
-      </main>
+      {/* Área do Kanban: Fundo ligeiramente diferente para contraste */}
+      <div className="flex-1 h-full min-w-0 bg-[#F1F5F9] dark:bg-[#0F1117] relative transition-colors">
+          <Board initialBoardId={boardId} />
+      </div>
     </div>
   );
 };
 
-// Gerenciador de Rotas (Simples)
-const AppRoutes = () => {
-  const { isAuthenticated, loading } = useAuth();
-  const [currentView, setCurrentView] = useState<'login' | 'register'>('login');
-
-  if (loading) {
-    return (
-      <div className="h-screen w-screen bg-[#121212] flex items-center justify-center text-[#E0E0E0]">
-        <span className="animate-pulse">Carregando Lignum...</span>
-      </div>
-    );
-  }
-
-  if (isAuthenticated) {
-    return <DashboardLayout />;
-  }
-
-  // Se não autenticado, alterna entre Login e Register
-  return currentView === 'login' ? (
-    <Login onNavigateToRegister={() => setCurrentView('register')} />
-  ) : (
-    <Register onNavigateToLogin={() => setCurrentView('login')} />
-  );
+// --- ROTA PROTEGIDA ---
+const PrivateRoutes = () => {
+    const { isAuthenticated, loading } = useAuth();
+    
+    if (loading) {
+        return (
+            <div className="h-screen w-screen bg-gray-50 dark:bg-[#121212] flex items-center justify-center text-gray-800 dark:text-[#E0E0E0]">
+                <span className="animate-pulse font-medium">Carregando Lignum...</span>
+            </div>
+        );
+    }
+    
+    return isAuthenticated ? <MainLayout /> : <Navigate to="/login" />;
 };
 
-// App Principal com Providers
+// --- ROTA PÚBLICA ---
+const PublicRoutes = () => {
+    const { isAuthenticated, loading } = useAuth();
+    if (loading) return null;
+    return isAuthenticated ? <Navigate to="/" /> : <Outlet />;
+};
+
 function App() {
   return (
-    <AuthProvider>
-      <AppRoutes />
-    </AuthProvider>
+    <ThemeProvider>
+        <AuthProvider>
+        <BrowserRouter>
+            <Routes>
+                {/* Rotas Públicas (Login/Register) */}
+                <Route element={<PublicRoutes />}>
+                    <Route path="/login" element={<LoginWrapper />} />
+                    <Route path="/register" element={<RegisterWrapper />} />
+                </Route>
+
+                {/* Rotas Privadas (Com Header Global) */}
+                <Route element={<PrivateRoutes />}>
+                    {/* Raiz -> Dashboard */}
+                    <Route path="/" element={<Dashboard />} />
+                    
+                    {/* Board -> Visualização com Sidebar */}
+                    <Route path="/board/:boardId" element={<BoardView />} />
+                </Route>
+
+                <Route path="*" element={<Navigate to="/" />} />
+            </Routes>
+        </BrowserRouter>
+        </AuthProvider>
+    </ThemeProvider>
   );
 }
+
+const LoginWrapper = () => { const navigate = useNavigate(); return <Login onNavigateToRegister={() => navigate('/register')} />; };
+const RegisterWrapper = () => { const navigate = useNavigate(); return <Register onNavigateToLogin={() => navigate('/login')} />; };
 
 export default App;

@@ -1,5 +1,5 @@
 import Fastify from 'fastify';
-import cors from '@fastify/cors'; // ✅ Ajustado para o pacote moderno
+import cors from '@fastify/cors';
 import jwt from '@fastify/jwt';
 import { env } from './config/env';
 import { query } from './database/connection';
@@ -10,6 +10,8 @@ import authRoutes from './routes/auth';
 import columnsRoutes from './routes/columns';
 import cardsRoutes from './routes/cards';
 import chatRoutes from './routes/chat';
+// NOVO: Importando a rota de boards
+import boardsRoutes from './routes/boards'; 
 
 const app = Fastify({
   logger: {
@@ -66,6 +68,8 @@ app.register(authRoutes, { prefix: '/auth' });
 app.register(columnsRoutes, { prefix: '/columns' });
 app.register(cardsRoutes, { prefix: '/cards' });
 app.register(chatRoutes, { prefix: '/chat' });
+// NOVO: Registrando a rota de boards
+app.register(boardsRoutes, { prefix: '/boards' });
 
 // --- INICIALIZAÇÃO ---
 

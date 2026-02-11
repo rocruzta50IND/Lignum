@@ -13,22 +13,36 @@ export const Card = ({ card, onClick }: CardProps) => {
     data: { type: 'CARD', card },
   });
 
-  const style = { transition, transform: CSS.Transform.toString(transform) };
+  const style = {
+    transition,
+    transform: CSS.Translate.toString(transform),
+    // DESIGN: Efeito de "levantar" e transparência ao arrastar
+    opacity: isDragging ? 0.4 : 1,
+    scale: isDragging ? '1.02' : '1',
+    zIndex: isDragging ? 999 : 'auto',
+  };
+
+  // Mapeamento de cores de prioridade (Tags mais elegantes)
+  const priorityColors = {
+      'Baixa': 'bg-green-50 text-green-700 border-green-200 dark:bg-green-900/20 dark:text-green-300 dark:border-green-800/30',
+      'Média': 'bg-amber-50 text-amber-700 border-amber-200 dark:bg-amber-900/20 dark:text-amber-300 dark:border-amber-800/30',
+      'Alta': 'bg-red-50 text-red-700 border-red-200 dark:bg-red-900/20 dark:text-red-300 dark:border-red-800/30',
+  };
+  const priorityStyle = priorityColors[card.priority || 'Média'] || priorityColors['Média'];
+
+  // Verifica se tem checklists ou comentários para mostrar ícones
+  const hasChecklist = card.checklist && card.checklist.length > 0;
+  const checklistCompleted = card.checklist?.filter(i => i.isChecked).length || 0;
+  const checklistTotal = card.checklist?.length || 0;
+  const hasComments = card.comments && card.comments.length > 0;
 
   if (isDragging) {
-    return (
-      <div ref={setNodeRef} style={style} className="opacity-40 bg-gray-300 dark:bg-[#22272B] min-h-[80px] rounded-lg cursor-grab" />
-    );
+    // Placeholder enquanto arrasta
+    return <div ref={setNodeRef} style={style} className="bg-white dark:bg-[#1F222A] p-4 rounded-2xl shadow-lg border-2 border-rose-500 dark:border-rose-400/50 cursor-grabbing" >
+        <div className="h-4 w-2/3 bg-gray-200 dark:bg-gray-700 rounded mb-3 animate-pulse"></div>
+        <div className="h-3 w-full bg-gray-100 dark:bg-gray-800 rounded animate-pulse"></div>
+    </div>;
   }
-
-  const totalItems = card.checklist?.length || 0;
-  const completedItems = card.checklist?.filter(i => i.isChecked).length || 0;
-  
-  const priorityColors = {
-      'Alta': 'bg-red-100 text-red-700 dark:bg-[#F87171] dark:text-white',
-      'Média': 'bg-amber-100 text-amber-700 dark:bg-[#FBBF24] dark:text-black',
-      'Baixa': 'bg-emerald-100 text-emerald-700 dark:bg-[#4ADE80] dark:text-black'
-  };
 
   return (
     <div
@@ -37,51 +51,75 @@ export const Card = ({ card, onClick }: CardProps) => {
       {...attributes}
       {...listeners}
       onClick={() => onClick(card)}
-      // DESIGN MODERNO: Branco no Light, Cinza no Dark. Sombra suave no Light.
-      className="
-        bg-white dark:bg-[#22272B] 
-        p-3 rounded-lg cursor-pointer 
-        shadow-sm border border-gray-200 dark:border-transparent
-        hover:shadow-md dark:hover:bg-[#2C333A] 
-        hover:ring-2 hover:ring-rose-500/50 
-        group relative flex flex-col gap-2 transition-all
-      "
+      // DESIGN: O Card agora é um "bloco físico".
+      // Light Mode: Fundo branco puro, sombra difusa e borda muito sutil. Hover levanta o card.
+      // Dark Mode: Fundo de superfície (#1F222A), borda sutil para definição.
+      className="bg-white dark:bg-[#1F222A] p-4 rounded-2xl shadow-sm hover:shadow-md dark:shadow-none border border-gray-100 dark:border-gray-800/80 cursor-grab active:cursor-grabbing group transition-all duration-200 hover:-translate-y-0.5 relative overflow-hidden"
     >
-      {/* Etiquetas */}
-      {card.priority && (
-          <div className="flex flex-wrap gap-1">
-              <span className={`h-1.5 w-8 rounded-full ${priorityColors[card.priority]} transition-colors`} title={card.priority}></span>
-          </div>
+      {/* Indicador de cor lateral (opcional, baseado no hexColor do card se existir) */}
+      {card.hexColor && card.hexColor !== '#2C2C2C' && (
+          <div className="absolute left-0 top-0 bottom-0 w-1" style={{ backgroundColor: card.hexColor }}></div>
       )}
 
-      {/* Título: Preto no Light, Cinza claro no Dark */}
-      <p className="text-gray-700 dark:text-[#B6C2CF] text-sm leading-snug break-words font-medium">
-        {card.title}
-      </p>
+      <div className={card.hexColor && card.hexColor !== '#2C2C2C' ? 'pl-3' : ''}>
+        {/* Header do Card (Prioridade + Menu oculto) */}
+        <div className="flex justify-between items-start mb-2.5">
+            {card.priority && (
+                <span className={`text-[10px] font-bold uppercase tracking-wider px-2 py-0.5 rounded-md border ${priorityStyle}`}>
+                    {card.priority}
+                </span>
+            )}
+            {/* Ícone de "drag handle" sutil que aparece no hover */}
+            <svg className="w-4 h-4 text-gray-300 dark:text-gray-600 opacity-0 group-hover:opacity-100 transition-opacity" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}><path strokeLinecap="round" strokeLinejoin="round" d="M12 5v.01M12 12v.01M12 19v.01M12 6a1 1 0 110-2 1 1 0 010 2zm0 7a1 1 0 110-2 1 1 0 010 2zm0 7a1 1 0 110-2 1 1 0 010 2z" /></svg>
+        </div>
 
-      {/* Metadados */}
-      {(totalItems > 0 || card.dueDate || (card.comments?.length || 0) > 0 || card.description) && (
-          <div className="flex items-center gap-3 mt-1 text-xs text-gray-400 dark:text-[#9fadbc]">
-            {card.description && <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 6h16M4 12h16M4 18h7" /></svg>}
+        {/* Título do Card */}
+        <h4 className="text-[15px] font-bold text-gray-800 dark:text-gray-100 leading-snug mb-1.5">
+            {card.title}
+        </h4>
+        
+        {/* Descrição (truncada) */}
+        {card.description && (
+            <p className="text-sm text-gray-500 dark:text-gray-400 line-clamp-2 mb-3 leading-relaxed font-medium">
+                {card.description}
+            </p>
+        )}
+
+        {/* Rodapé do Card (Ícones de metadados) */}
+        <div className="flex items-center gap-4 mt-3 pt-3 border-t border-gray-100 dark:border-gray-800/50 text-xs font-medium text-gray-400 dark:text-gray-500">
             
+            {/* Data de Entrega (se houver) */}
             {card.dueDate && (
-                <div className="flex items-center gap-1 hover:text-rose-500 transition-colors">
-                    <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" /></svg>
-                    <span>{new Date(card.dueDate).toLocaleDateString('pt-BR', {day: '2-digit', month: 'short'})}</span>
+                 <div className={`flex items-center gap-1.5 ${new Date(card.dueDate) < new Date() ? 'text-red-500 dark:text-red-400' : ''}`}>
+                    <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}><path strokeLinecap="round" strokeLinejoin="round" d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" /></svg>
+                    {new Date(card.dueDate).toLocaleDateString()}
+                 </div>
+            )}
+
+            {/* Checklist */}
+            {hasChecklist && (
+                <div className="flex items-center gap-1.5">
+                    <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}><path strokeLinecap="round" strokeLinejoin="round" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" /></svg>
+                    <span>{checklistCompleted}/{checklistTotal}</span>
                 </div>
             )}
 
-            {totalItems > 0 && (
-                <div className={`flex items-center gap-1 px-1.5 py-0.5 rounded ${completedItems === totalItems ? 'bg-green-100 text-green-600 dark:bg-green-900/40 dark:text-green-400' : ''}`}>
-                    <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2" /></svg>
-                    <span>{completedItems}/{totalItems}</span>
+            {/* Comentários */}
+            {hasComments && (
+                <div className="flex items-center gap-1.5">
+                    <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}><path strokeLinecap="round" strokeLinejoin="round" d="M7 8h10M7 12h4m1 8l-4-4H5a2 2 0 01-2-2V6a2 2 0 012-2h14a2 2 0 012 2v8a2 2 0 01-2 2h-3l-4 4z" /></svg>
+                    <span>{card.comments?.length}</span>
                 </div>
             )}
-             {(card.comments?.length || 0) > 0 && (
-                <div className="flex items-center gap-1"><svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 12h.01M12 12h.01M16 12h.01M21 12c0 4.418-4.03 8-9 8a9.863 9.863 0 01-4.255-.949L3 20l1.395-3.72C3.512 15.042 3 13.574 3 12c0-4.418 4.03-8 9-8s9 3.582 9 8z" /></svg><span>{card.comments?.length}</span></div>
+            
+            {/* Avatar do Responsável (se houver - placeholder) */}
+            {card.assignee && (
+                <div className="ml-auto w-6 h-6 rounded-full bg-gray-200 dark:bg-gray-700 border border-white dark:border-[#1F222A] flex items-center justify-center text-[9px] font-bold text-gray-600 dark:text-gray-300">
+                    {card.assignee.substring(0,2).toUpperCase()}
+                </div>
             )}
-          </div>
-      )}
+        </div>
+      </div>
     </div>
   );
 };
