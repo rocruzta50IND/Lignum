@@ -10,6 +10,8 @@ import authRoutes from './routes/auth';
 import columnsRoutes from './routes/columns';
 import cardsRoutes from './routes/cards';
 import chatRoutes from './routes/chat';
+import usersRoutes from './routes/users';
+import notificationsRoutes from './routes/notifications';
 // NOVO: Importando a rota de boards
 import boardsRoutes from './routes/boards'; 
 
@@ -68,9 +70,9 @@ app.register(authRoutes, { prefix: '/auth' });
 app.register(columnsRoutes, { prefix: '/columns' });
 app.register(cardsRoutes, { prefix: '/cards' });
 app.register(chatRoutes, { prefix: '/chat' });
-// NOVO: Registrando a rota de boards
 app.register(boardsRoutes, { prefix: '/boards' });
-
+app.register(usersRoutes, { prefix: '/users' });
+app.register(notificationsRoutes, { prefix: '/notifications' });
 // --- INICIALIZAÇÃO ---
 
 const start = async () => {

@@ -113,9 +113,13 @@ export const Card = ({ card, onClick }: CardProps) => {
             )}
             
             {/* Avatar do Responsável (se houver - placeholder) */}
-            {card.assignee && (
-                <div className="ml-auto w-6 h-6 rounded-full bg-gray-200 dark:bg-gray-700 border border-white dark:border-[#1F222A] flex items-center justify-center text-[9px] font-bold text-gray-600 dark:text-gray-300">
-                    {card.assignee.substring(0,2).toUpperCase()}
+            {/* Avatar do Responsável (Agora com dados reais) */}
+            {card.assignee && card.assigneeName && (
+                <div 
+                    title={`Responsável: ${card.assigneeName}`}
+                    className="ml-auto w-6 h-6 rounded-full bg-gradient-to-tr from-rose-100 to-orange-100 dark:from-rose-900/50 dark:to-orange-900/50 border border-white dark:border-[#1F222A] flex items-center justify-center text-[9px] font-bold text-rose-600 dark:text-rose-200 uppercase shadow-sm"
+                >
+                    {card.assigneeName.substring(0, 2)}
                 </div>
             )}
         </div>

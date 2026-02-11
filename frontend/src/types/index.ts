@@ -24,6 +24,7 @@ export interface Card {
   priority?: Priority;
   dueDate?: string | null;
   assignee?: string | null;
+  assigneeName?: string | null;
   hexColor?: string;
   checklist?: ChecklistItem[];
   comments?: Comment[];
