@@ -1,7 +1,7 @@
 import React, { useState, useCallback, useEffect, useMemo } from 'react';
 import { DndContext, DragOverlay, useSensor, useSensors, PointerSensor, KeyboardSensor, pointerWithin, defaultDropAnimationSideEffects } from '@dnd-kit/core';
 import type { DragStartEvent, DragOverEvent, DragEndEvent, DropAnimation, CollisionDetection } from '@dnd-kit/core';
-import { SortableContext, arrayMove, sortableKeyboardCoordinates } from '@dnd-kit/sortable';
+import { SortableContext, arrayMove, sortableKeyboardCoordinates, horizontalListSortingStrategy } from '@dnd-kit/sortable';
 import { Column } from './Column'; 
 import { Card } from './Card'; 
 import { CardModal } from './CardModal';
@@ -27,6 +27,8 @@ export const Board: React.FC = () => {
     useSensor(PointerSensor, { activationConstraint: { distance: 5 } }),
     useSensor(KeyboardSensor, { coordinateGetter: sortableKeyboardCoordinates })
   );
+  
+  // IMPORTANTE: Use useMemo para IDs
   const columnsId = useMemo(() => columns.map((col) => col.id), [columns]);
 
   const fetchBoardData = useCallback(async () => {
@@ -52,8 +54,13 @@ export const Board: React.FC = () => {
   }, []);
 
   const onDragStart = (event: DragStartEvent) => {
-    if (event.active.data.current?.type === 'COLUMN') { setActiveColumn(event.active.data.current.column); return; }
-    if (event.active.data.current?.type === 'CARD') { setActiveCard(event.active.data.current.card); }
+    if (event.active.data.current?.type === 'COLUMN') { 
+        setActiveColumn(event.active.data.current.column); 
+        return; 
+    }
+    if (event.active.data.current?.type === 'CARD') { 
+        setActiveCard(event.active.data.current.card); 
+    }
   };
 
   const onDragOver = (event: DragOverEvent) => { 
@@ -62,9 +69,12 @@ export const Board: React.FC = () => {
       const activeId = active.id;
       const overId = over.id;
       if (activeId === overId) return;
+      
       const isActiveACard = active.data.current?.type === 'CARD';
       const isOverACard = over.data.current?.type === 'CARD';
       const isOverAColumn = over.data.current?.type === 'COLUMN';
+      
+      // Só gerenciamos drag over se for CARD. Colunas são tratadas apenas no onDragEnd.
       if (!isActiveACard) return;
   
       if (isActiveACard && isOverACard) {
@@ -110,18 +120,46 @@ export const Board: React.FC = () => {
   };
 
   const onDragEnd = async (event: DragEndEvent) => { 
+      const { active, over } = event;
+      
+      // Limpa estados de "arrastando"
       setActiveColumn(null);
       setActiveCard(null);
-      const { active, over } = event;
+
       if (!over) return;
+
+      // --- 1. LÓGICA DE COLUNAS ---
+      if (active.data.current?.type === 'COLUMN') {
+          if (active.id !== over.id) {
+              const oldIndex = columns.findIndex((col) => col.id === active.id);
+              const newIndex = columns.findIndex((col) => col.id === over.id);
+
+              // 1. Atualiza visualmente (Optimistic)
+              setColumns((items) => arrayMove(items, oldIndex, newIndex));
+
+              // 2. Chama o Backend
+              try {
+                  await api.patch(`/columns/${active.id}/move`, { newPosition: newIndex });
+              } catch (error) {
+                  console.error("Erro ao mover coluna:", error);
+                  fetchBoardData(); // Reverte se falhar
+              }
+          }
+          return; // Para por aqui, não executa lógica de cards
+      }
+
+      // --- 2. LÓGICA DE CARDS ---
       const activeId = active.id;
       const overId = over.id;
       const activeColumnIndex = columns.findIndex((col) => col.cards.some((c) => c.id === activeId));
       let overColumnIndex = columns.findIndex((col) => col.id === overId);
       if (overColumnIndex === -1) overColumnIndex = columns.findIndex((col) => col.cards.some((c) => c.id === overId));
+      
       if (activeColumnIndex === -1 || overColumnIndex === -1) return;
+      
       const activeColumn = columns[activeColumnIndex];
       const overColumn = columns[overColumnIndex];
+      
       if (activeColumnIndex !== overColumnIndex || activeId !== overId) {
           if (activeColumnIndex === overColumnIndex) {
                const oldIndex = activeColumn.cards.findIndex(c => c.id === activeId);
@@ -137,6 +175,11 @@ export const Board: React.FC = () => {
       }
   };
 
+  // Funções auxiliares (Update, Create, Delete...)
+  const handleUpdateColumn = async (columnId: string, newTitle: string) => {
+      setColumns(prev => prev.map(col => col.id === columnId ? { ...col, title: newTitle } : col));
+      try { await api.patch(`/columns/${columnId}`, { title: newTitle }); } catch (e) { console.error(e); fetchBoardData(); }
+  };
   const handleCreateCard = async (columnId: string, title: string) => {
     try { 
         const response = await api.post('/cards', { columnId, title }); 
@@ -144,20 +187,11 @@ export const Board: React.FC = () => {
     } catch (e) { console.error(e); fetchBoardData(); }
   };
   const handleDeleteColumn = async (columnId: string) => { try { await api.delete(`/columns/${columnId}`); setColumns(prev => prev.filter(col => col.id !== columnId)); } catch (e) { console.error(e); } }
-  
-  // NOVO: Função para deletar card localmente e no servidor
   const handleDeleteCard = async (cardId: string, columnId: string) => {
-      // 1. Remove visualmente (Instantâneo)
-      setColumns(prev => prev.map(col => {
-          if (col.id !== columnId) return col;
-          return { ...col, cards: col.cards.filter(c => c.id !== cardId) };
-      }));
-      setSelectedCard(null); // Fecha o modal
-
-      // 2. Chama API
+      setColumns(prev => prev.map(col => { if (col.id !== columnId) return col; return { ...col, cards: col.cards.filter(c => c.id !== cardId) }; }));
+      setSelectedCard(null);
       try { await api.delete(`/cards/${cardId}`); } catch(e) { console.error(e); fetchBoardData(); }
   };
-
   const submitColumn = async () => {
     if (!newColumnTitle.trim()) { setIsCreatingColumn(false); return; }
     if (!currentBoardId) return;
@@ -169,7 +203,6 @@ export const Board: React.FC = () => {
         setTimeout(() => { const board = document.getElementById('board-container'); if(board) board.scrollTo({ left: board.scrollWidth, behavior: 'smooth' }); }, 100);
     } catch (e) { console.error(e); }
   };
-  
   const handleCardUpdate = (updatedCard: CardType) => {
     setColumns(prev => prev.map(col => col.id === updatedCard.columnId ? { ...col, cards: col.cards.map(c => c.id === updatedCard.id ? updatedCard : c) } : col));
     setSelectedCard(updatedCard);
@@ -182,22 +215,14 @@ export const Board: React.FC = () => {
         bg-gray-100 dark:bg-gradient-to-br dark:from-[#09090b] dark:via-[#121212] dark:to-[#18181b] 
         items-start transition-colors duration-300 relative"
       >
-        
-        <button 
-            onClick={toggleTheme}
-            className="fixed top-3 right-64 z-[9999] w-9 h-9 rounded-md flex items-center justify-center bg-transparent hover:bg-white/10 text-gray-400 hover:text-yellow-400 transition-all cursor-pointer border border-transparent hover:border-white/5"
-            title="Alternar Tema"
-        >
-            {theme === 'dark' ? (
-                 <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 3v1m0 16v1m9-9h-1M4 12H3m15.364 6.364l-.707-.707M6.343 6.343l-.707-.707m12.728 0l-.707.707M6.343 17.657l-.707.707M16 12a4 4 0 11-8 0 4 4 0 018 0z" /></svg>
-            ) : (
-                 <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M20.354 15.354A9 9 0 018.646 3.646 9.003 9.003 0 0012 21a9.003 9.003 0 008.354-5.646z" /></svg>
-            )}
+        <button onClick={toggleTheme} className="fixed top-3 right-64 z-[9999] w-9 h-9 rounded-md flex items-center justify-center bg-transparent hover:bg-white/10 text-gray-400 hover:text-yellow-400 transition-all cursor-pointer border border-transparent hover:border-white/5" title="Alternar Tema">
+            {theme === 'dark' ? (<svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 3v1m0 16v1m9-9h-1M4 12H3m15.364 6.364l-.707-.707M6.343 6.343l-.707-.707m12.728 0l-.707.707M6.343 17.657l-.707.707M16 12a4 4 0 11-8 0 4 4 0 018 0z" /></svg>) : (<svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M20.354 15.354A9 9 0 018.646 3.646 9.003 9.003 0 0012 21a9.003 9.003 0 008.354-5.646z" /></svg>)}
         </button>
 
-        <SortableContext items={columnsId}>
+        {/* DEFINIR ESTRATÉGIA HORIZONTAL PARA COLUNAS */}
+        <SortableContext items={columnsId} strategy={horizontalListSortingStrategy}>
             {columns.map((col) => (
-            <Column key={col.id} column={col} onCreateCard={handleCreateCard} onDeleteColumn={handleDeleteColumn} onCardClick={(card) => setSelectedCard(card)} />
+            <Column key={col.id} column={col} onCreateCard={handleCreateCard} onDeleteColumn={handleDeleteColumn} onCardClick={(card) => setSelectedCard(card)} onUpdateColumn={handleUpdateColumn} />
             ))}
         </SortableContext>
 
@@ -222,18 +247,7 @@ export const Board: React.FC = () => {
         {activeColumn && <Column column={activeColumn} onCardClick={()=>{}} />}
       </DragOverlay>
 
-      {selectedCard && (
-        <CardModal 
-            isOpen={!!selectedCard} 
-            card={selectedCard} 
-            boardId={currentBoardId || ''} 
-            // CORREÇÃO CRÍTICA: Removemos o fetchBoardData() daqui.
-            onClose={() => setSelectedCard(null)} 
-            onUpdateLocal={handleCardUpdate}
-            // NOVO: Passamos a função de delete
-            onDelete={() => handleDeleteCard(selectedCard.id, selectedCard.columnId)}
-        />
-      )}
+      {selectedCard && (<CardModal isOpen={!!selectedCard} card={selectedCard} boardId={currentBoardId || ''} onClose={() => setSelectedCard(null)} onUpdateLocal={handleCardUpdate} onDelete={() => handleDeleteCard(selectedCard.id, selectedCard.columnId)} />)}
     </DndContext>
   );
 };
