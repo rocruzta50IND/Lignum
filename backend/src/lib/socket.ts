@@ -1,39 +1,41 @@
-import { Server as SocketIOServer, Socket } from 'socket.io';
-import { Server as HttpServer } from 'http';
+import { Server } from 'socket.io';
 
-let io: SocketIOServer | null = null;
+let io: Server;
 
-export const initSocket = (server: HttpServer) => {
-  console.log('🔌 Inicializando Socket.io...');
-  
-  io = new SocketIOServer(server, {
+export const initSocket = (httpServer: any) => {
+  io = new Server(httpServer, {
     cors: {
-      origin: true, // Em produção: process.env.FRONTEND_URL
-      methods: ["GET", "POST"],
-      credentials: true
+      origin: "*", // Em produção, restrinja isso
+      methods: ["GET", "POST"]
     }
   });
 
-  io.on('connection', (socket: Socket) => {
-    console.log(`🔌 Cliente conectado: ${socket.id}`);
+  io.on('connection', (socket) => {
+    console.log('🔌 Cliente conectado:', socket.id);
 
-    // Cliente entra na sala do Board
-    socket.on('join_board', (boardId: string) => {
-      console.log(`👤 Socket ${socket.id} entrou na sala: ${boardId}`);
+    // Entrar na sala do board
+    socket.on('join_board', (boardId) => {
       socket.join(boardId);
+      console.log(`👤 Socket ${socket.id} entrou no board ${boardId}`);
+    });
+
+    // Sair da sala
+    socket.on('leave_board', (boardId) => {
+      socket.leave(boardId);
     });
 
     socket.on('disconnect', () => {
-      // console.log(`❌ Cliente desconectado: ${socket.id}`);
+      console.log('❌ Cliente desconectado');
     });
   });
 
   return io;
 };
 
-export const getIO = (): SocketIOServer => {
+// Função para pegar a instância do IO em outros arquivos
+export const getIO = () => {
   if (!io) {
-    throw new Error("Socket.io não foi inicializado! Chame initSocket no server.ts primeiro.");
+    throw new Error("Socket.io não inicializado!");
   }
   return io;
 };
