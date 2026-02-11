@@ -1,9 +1,8 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { api } from '../../services/api';
 import type { Card, ChecklistItem, Comment } from '../../types';
-import { UserAvatar } from '../UserAvatar'; // <--- Já importado
-import { useAuth } from '../../contexts/AuthContext'; // <--- Necessário para pegar o user logado
-import { SuccessModal } from '../SuccessModal'; // <--- Importando o Modal de Sucesso
+import { UserAvatar } from '../UserAvatar'; 
+import { useAuth } from '../../contexts/AuthContext';
 
 interface CardModalProps {
   isOpen: boolean; 
@@ -14,30 +13,33 @@ interface CardModalProps {
   onDelete: () => void;
 }
 
+// Estendendo a interface de Comentário para incluir avatar (caso não tenha no types.ts)
+interface ExtendedComment extends Comment {
+    userAvatar?: string;
+}
+
 export const CardModal: React.FC<CardModalProps> = ({ isOpen, card, boardId, onClose, onUpdateLocal, onDelete }) => {
   if (!isOpen) return null;
 
-  const { user } = useAuth(); // Pegando usuário logado para o avatar
+  const { user } = useAuth();
 
-  // States do formulário
   const [title, setTitle] = useState(card.title);
   const [description, setDescription] = useState(card.description || '');
   const [priority, setPriority] = useState(card.priority || 'Baixa');
   const [dueDate, setDueDate] = useState(card.dueDate ? card.dueDate.split('T')[0] : '');
   
-  // Checklist e Comentários
   const [checklist, setChecklist] = useState<ChecklistItem[]>(card.checklist || []);
   const [newChecklistItem, setNewChecklistItem] = useState('');
-  const [comments, setComments] = useState<Comment[]>(card.comments || []);
+  
+  // Usando a interface estendida para suportar avatar
+  const [comments, setComments] = useState<ExtendedComment[]>(card.comments || []);
   const [newComment, setNewComment] = useState('');
   
-  // UX States
   const [isDeleting, setIsDeleting] = useState(false);
-  const [showSuccess, setShowSuccess] = useState(false); // State para o modal de sucesso
+  const [isSaving, setIsSaving] = useState(false);
   
   const commentInputRef = useRef<HTMLTextAreaElement>(null);
 
-  // Resetar states ao abrir card diferente
   useEffect(() => { 
       setTitle(card.title); 
       setDescription(card.description || ''); 
@@ -46,10 +48,8 @@ export const CardModal: React.FC<CardModalProps> = ({ isOpen, card, boardId, onC
       setChecklist(card.checklist || []); 
       setComments(card.comments || []); 
       setIsDeleting(false); 
-      setShowSuccess(false);
   }, [card]);
 
-  // Lógica Checklist
   const addChecklistItem = () => { 
       if (!newChecklistItem.trim()) return; 
       const newItem: ChecklistItem = { id: crypto.randomUUID(), text: newChecklistItem, isChecked: false }; 
@@ -63,17 +63,14 @@ export const CardModal: React.FC<CardModalProps> = ({ isOpen, card, boardId, onC
       setChecklist(prev => prev.filter(item => item.id !== itemId)); 
   };
 
-  // Lógica Comentários
   const addComment = () => { 
       if (!newComment.trim() || !user) return; 
       
-      const comment: Comment = { 
+      const comment: ExtendedComment = { 
           id: crypto.randomUUID(), 
           userId: user.id, 
           userName: user.name, 
-          // Importante: Se o backend suportar salvar avatar no comentário, adicione aqui. 
-          // Se não, o UserAvatar vai tentar resolver pelo nome ou precisaremos atualizar o tipo Comment.
-          // Por enquanto vamos assumir que o UserAvatar resolverá visualmente na lista se tivermos os dados.
+          userAvatar: user.avatar, // <--- 1. SALVANDO A FOTO NO COMENTÁRIO
           content: newComment, 
           createdAt: new Date().toISOString() 
       }; 
@@ -81,40 +78,34 @@ export const CardModal: React.FC<CardModalProps> = ({ isOpen, card, boardId, onC
       setNewComment(''); 
   };
 
-  // Salvar
   const handleSave = async () => { 
+      setIsSaving(true);
       try { 
-          const payload = { title, description, priority, dueDate: dueDate || null, checklist, comments, columnId: card.columnId }; 
+          const payload = { 
+              title, 
+              description, 
+              priority, 
+              dueDate: dueDate || null, 
+              checklist, 
+              comments, // Envia os comentários novos com avatar
+              columnId: card.columnId 
+          }; 
           const res = await api.put(`/cards/${card.id}`, payload); 
           
-          onUpdateLocal(res.data); 
-          
-          // <--- AQUI: Mostra sucesso em vez de fechar direto
-          setShowSuccess(true);
+          onUpdateLocal(res.data);
+          onClose(); // <--- 2. FECHAMENTO AUTOMÁTICO
           
       } catch (e) { 
           console.error(e); 
           alert("Erro ao salvar card.");
-      } 
-  };
-
-  const handleCloseSuccess = () => {
-      setShowSuccess(false);
-      onClose(); // Fecha o modal principal só depois de fechar o de sucesso
+      } finally {
+          setIsSaving(false);
+      }
   };
 
   const progress = checklist.length > 0 ? Math.round((checklist.filter(i => i.isChecked).length / checklist.length) * 100) : 0;
 
   return (
-    <>
-    {/* Modal de Sucesso sobreposto */}
-    <SuccessModal 
-        isOpen={showSuccess} 
-        onClose={handleCloseSuccess} 
-        title="Card Atualizado!" 
-        message="Todas as alterações foram salvas." 
-    />
-
     <div className="fixed inset-0 z-[99999] flex items-center justify-center p-4 animate-in fade-in duration-200">
       <div className="absolute inset-0 bg-[#0F1117]/60 backdrop-blur-md" onClick={onClose}></div>
       
@@ -134,8 +125,7 @@ export const CardModal: React.FC<CardModalProps> = ({ isOpen, card, boardId, onC
             </button>
         </div>
 
-        <div className="flex-1 overflow-y-auto custom-scrollbar p-8 grid grid-cols-1 md:grid-cols-3 gap-10 bg-[#F8FAFC] dark:bg-[#16181D]">
-            {/* COLUNA ESQUERDA (Conteúdo) */}
+        <div className="flex-1 overflow-y-auto custom-scrollbar p-8 grid grid-cols-1 md:grid-cols-3 gap-10 bg-[#F8FAFC] dark:bg-[#0F1117]">
             <div className="md:col-span-2 space-y-10">
                 {/* Descrição */}
                 <div>
@@ -180,13 +170,13 @@ export const CardModal: React.FC<CardModalProps> = ({ isOpen, card, boardId, onC
                 {/* Comentários */}
                 <div>
                     <h3 className="flex items-center gap-3 text-xs font-bold text-gray-500 dark:text-gray-400 uppercase tracking-wider mb-6">
-                        <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}><path strokeLinecap="round" strokeLinejoin="round" d="M8 10h.01M12 10h.01M16 10h.01M9 16H5a2 2 0 01-2-2V6a2 2 0 012-2h14a2 2 0 012 2v8a2 2 0 01-2 2h-5l-5 5v-5z" /></svg>
+                        <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}><path strokeLinecap="round" strokeLinejoin="round" d="M8 10h.01M12 10h.01M16 10h.01M9 16H5a2 2 0 01-2-2V6a2 2 0 012-2h14a2 2 0 01-2 2v8a2 2 0 01-2 2h-5l-5 5v-5z" /></svg>
                         Atividade
                     </h3>
                     <div className="flex gap-4 mb-8">
-                        {/* Avatar do usuário logado (EU) */}
-                        <UserAvatar user={user} size="md" />
-                        
+                        <div className="flex-shrink-0">
+                            <UserAvatar user={user} size="md" />
+                        </div>
                         <div className="flex-1 relative">
                             <textarea ref={commentInputRef} value={newComment} onChange={(e) => setNewComment(e.target.value)} placeholder="Escreva um comentário..." className="w-full bg-white dark:bg-[#1F222A] border border-gray-200 dark:border-gray-700 rounded-xl p-4 text-sm text-gray-800 dark:text-white focus:ring-2 focus:ring-rose-500/50 focus:border-rose-500 focus:outline-none resize-none shadow-sm transition-all pb-12" rows={3} />
                             {newComment && <button onClick={addComment} className="absolute right-3 bottom-3 bg-rose-600 hover:bg-rose-700 text-white px-4 py-1.5 rounded-lg text-xs font-bold transition-all shadow-sm hover:shadow-md hover:scale-105 active:scale-95">Comentar</button>}
@@ -195,9 +185,14 @@ export const CardModal: React.FC<CardModalProps> = ({ isOpen, card, boardId, onC
                     <div className="space-y-6">
                         {comments.map(comment => (
                             <div key={comment.id} className="flex gap-4 group">
-                                {/* Avatar do autor do comentário */}
-                                <UserAvatar name={comment.userName} size="md" />
-                                
+                                <div className="flex-shrink-0">
+                                    {/* 3. LENDO A FOTO DO COMENTÁRIO */}
+                                    <UserAvatar 
+                                        name={comment.userName} 
+                                        src={comment.userAvatar} 
+                                        size="md" 
+                                    />
+                                </div>
                                 <div className="flex-1">
                                     <div className="flex items-center gap-2 mb-1"><span className="font-bold text-sm text-gray-800 dark:text-white">{comment.userName}</span><span className="text-xs text-gray-400 font-medium">{new Date(comment.createdAt).toLocaleString()}</span></div>
                                     <div className="text-sm text-gray-700 dark:text-gray-200 p-3 bg-white dark:bg-[#1F222A] rounded-xl border border-gray-100 dark:border-gray-800/50 shadow-sm leading-relaxed">{comment.content}</div>
@@ -208,9 +203,7 @@ export const CardModal: React.FC<CardModalProps> = ({ isOpen, card, boardId, onC
                 </div>
             </div>
 
-            {/* COLUNA DIREITA (Sidebar do Modal) */}
             <div className="space-y-8">
-                {/* Seletor de Prioridade */}
                 <div>
                     <label className="block text-xs font-bold text-gray-500 dark:text-gray-400 uppercase mb-3">Prioridade</label>
                     <div className="flex flex-col gap-2 p-1 bg-gray-100 dark:bg-[#1F222A] rounded-xl border border-gray-200 dark:border-gray-800/50">
@@ -224,14 +217,12 @@ export const CardModal: React.FC<CardModalProps> = ({ isOpen, card, boardId, onC
                         )})}
                     </div>
                 </div>
-                {/* Data de Entrega */}
                 <div>
                     <label className="block text-xs font-bold text-gray-500 dark:text-gray-400 uppercase mb-3">Data de Entrega</label>
                     <input type="date" value={dueDate} onChange={(e) => setDueDate(e.target.value)} className="w-full bg-white dark:bg-[#1F222A] border border-gray-200 dark:border-gray-700 rounded-xl px-4 py-3 text-sm text-gray-800 dark:text-gray-200 focus:outline-none focus:ring-2 focus:ring-rose-500/50 focus:border-rose-500 transition-all shadow-sm font-medium" />
                 </div>
                 <hr className="border-gray-200 dark:border-gray-800/50 my-6" />
                 
-                {/* Botões de Ação */}
                 <div className="space-y-3">
                     {!isDeleting ? (
                         <button onClick={() => setIsDeleting(true)} className="w-full text-red-500 hover:bg-red-50 dark:hover:bg-red-900/20 font-bold py-3 px-4 rounded-xl transition-colors text-sm flex items-center justify-center gap-2 border border-red-100 dark:border-red-900/30">
@@ -247,15 +238,20 @@ export const CardModal: React.FC<CardModalProps> = ({ isOpen, card, boardId, onC
                             </div>
                         </div>
                     )}
-                    <button onClick={handleSave} className="w-full bg-gradient-to-r from-rose-600 to-rose-500 hover:from-rose-700 hover:to-rose-600 text-white font-bold py-3 px-4 rounded-xl shadow-lg shadow-rose-500/20 transition-all transform hover:scale-[1.02] active:scale-95 flex justify-center items-center gap-2">
-                        <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}><path strokeLinecap="round" strokeLinejoin="round" d="M5 13l4 4L19 7" /></svg>
-                        Salvar Alterações
+                    <button onClick={handleSave} disabled={isSaving} className="w-full bg-gradient-to-r from-rose-600 to-rose-500 hover:from-rose-700 hover:to-rose-600 text-white font-bold py-3 px-4 rounded-xl shadow-lg shadow-rose-500/20 transition-all transform hover:scale-[1.02] active:scale-95 flex justify-center items-center gap-2">
+                        {isSaving ? (
+                            <span>Salvando...</span>
+                        ) : (
+                            <>
+                                <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}><path strokeLinecap="round" strokeLinejoin="round" d="M5 13l4 4L19 7" /></svg>
+                                Salvar Alterações
+                            </>
+                        )}
                     </button>
                 </div>
             </div>
         </div>
       </div>
     </div>
-    </>
   );
 };
