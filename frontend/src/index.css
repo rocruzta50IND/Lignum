@@ -1,0 +1,41 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* --- RESET BÁSICO (Para garantir altura total) --- */
+html, body, #root {
+  height: 100%;
+  margin: 0;
+  overflow: hidden; /* O Board gerencia o scroll */
+  background-color: #0F1115; /* Fallback color */
+}
+
+/* --- SCROLLBAR CUSTOMIZADO (TEMA DARK) --- */
+@layer utilities {
+  /* Firefox */
+  * {
+    scrollbar-width: thin;
+    scrollbar-color: #4B5563 transparent;
+  }
+
+  /* Chrome, Edge, Safari */
+  ::-webkit-scrollbar {
+    width: 8px;
+    height: 8px;
+  }
+
+  ::-webkit-scrollbar-track {
+    background: transparent;
+  }
+
+  ::-webkit-scrollbar-thumb {
+    background-color: #374151; /* Gray-700 */
+    border-radius: 20px;
+    border: 3px solid transparent;
+    background-clip: content-box;
+  }
+
+  ::-webkit-scrollbar-thumb:hover {
+    background-color: #6B7280; /* Gray-500 */
+  }
+}

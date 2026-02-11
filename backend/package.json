@@ -1,0 +1,41 @@
+{
+  "name": "sistema-lignum-backend",
+  "version": "1.0.0",
+  "description": "Backend do Sistema Lignum (Kanban Real-time)",
+  "main": "dist/server.js",
+  "scripts": {
+    "dev": "ts-node-dev --respawn --transpile-only src/server.ts",
+    "build": "tsc",
+    "start": "node dist/server.js",
+    "db:setup": "ts-node src/scripts/setup-db.ts",
+    "db:seed": "ts-node src/scripts/setup-db.ts && ts-node src/scripts/seed.ts"
+  },
+  "keywords": [
+    "kanban",
+    "fastify",
+    "real-time",
+    "postgres"
+  ],
+  "author": "Arquiteto Lignum",
+  "license": "ISC",
+  "dependencies": {
+    "@fastify/cors": "^11.2.0",
+    "@fastify/jwt": "^10.0.0",
+    "bcryptjs": "^3.0.3",
+    "dotenv": "^16.4.5",
+    "fastify": "^5.7.4",
+    "fastify-plugin": "^4.5.1",
+    "pg": "^8.11.3",
+    "socket.io": "^4.7.4",
+    "zod": "^3.22.4"
+  },
+  "devDependencies": {
+    "@types/bcryptjs": "^2.4.6",
+    "@types/node": "^20.11.19",
+    "@types/pg": "^8.11.0",
+    "pino-pretty": "^10.3.1",
+    "ts-node": "^10.9.2",
+    "ts-node-dev": "^2.0.0",
+    "typescript": "^5.3.3"
+  }
+}
