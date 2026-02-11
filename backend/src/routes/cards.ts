@@ -68,15 +68,15 @@ const cardsRoutes: FastifyPluginAsync = async (app) => {
             WHERE id = $9
             RETURNING *;
         `;
-        const values = [
-            body.title, 
-            body.description, 
-            checklistJson,
-            commentsJson,
-            body.assignee,
-            sqlDueDate, 
-            body.hexColor,
-            body.priority,
+       const values = [
+            body.title ?? null,        // Se undefined, vira null para o COALESCE funcionar
+            body.description ?? null, 
+            checklistJson ?? null,
+            commentsJson ?? null,
+            body.assignee ?? null,
+            sqlDueDate ?? null,        // Já tratamos o NULL_RESET antes, mas por segurança
+            body.hexColor ?? null,
+            body.priority ?? null,
             params.cardId
         ];
         console.log(">>> VALORES ENVIADOS AO BANCO:", values);

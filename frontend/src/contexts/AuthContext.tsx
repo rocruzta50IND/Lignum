@@ -1,8 +1,15 @@
-// src/contexts/AuthContext.tsx
 import React, { createContext, useContext, useState, useEffect, ReactNode } from 'react';
+import { api } from '../services/api';
 import { authService } from '../services/authService';
-import type { LoginCredentials, RegisterCredentials } from '../services/authService'; // <--- O SEGREDO ESTÁ AQUI
-import type { User } from '../types';
+import type { LoginCredentials, RegisterCredentials } from '../services/authService';
+
+// Interface do Usuário
+export interface User {
+  id: string;
+  name: string;
+  email: string;
+  avatar?: string;
+}
 
 interface AuthContextData {
   user: User | null;
@@ -10,28 +17,28 @@ interface AuthContextData {
   signIn: (credentials: LoginCredentials) => Promise<void>;
   signUp: (credentials: RegisterCredentials) => Promise<void>;
   signOut: () => void;
+  updateUser: (data: Partial<User>) => void;
   loading: boolean;
 }
 
-const AuthContext = createContext<AuthContextData>({} as AuthContextData);
+// INICIALIZAÇÃO SEGURA COM NULL
+const AuthContext = createContext<AuthContextData | null>(null);
 
 export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) => {
   const [user, setUser] = useState<User | null>(null);
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
-    // Lógica de Persistência (Hidratação do Estado)
     const loadStorageData = () => {
       const storedToken = localStorage.getItem('lignum_token');
       const storedUser = localStorage.getItem('lignum_user');
 
       if (storedToken && storedUser) {
         try {
+          api.defaults.headers.common['Authorization'] = `Bearer ${storedToken}`;
           setUser(JSON.parse(storedUser));
-          // Opcional: Aqui poderíamos validar o token com o backend se necessário
         } catch (error) {
-          console.error("Erro ao parsear usuário do storage:", error);
-          // Se o JSON estiver corrompido, limpa tudo para evitar loops
+          console.error("Erro ao carregar sessão:", error);
           localStorage.removeItem('lignum_token');
           localStorage.removeItem('lignum_user');
         }
@@ -45,31 +52,27 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
   const signIn = async (credentials: LoginCredentials) => {
     try {
       const response = await authService.login(credentials);
-      
       const { token, user: apiUser } = response;
 
       localStorage.setItem('lignum_token', token);
       localStorage.setItem('lignum_user', JSON.stringify(apiUser));
-      
+      api.defaults.headers.common['Authorization'] = `Bearer ${token}`;
       setUser(apiUser);
     } catch (error) {
-      console.error("Erro no contexto de login:", error);
-      throw error; // Relança para o componente tratar o feedback visual
+      throw error;
     }
   };
 
   const signUp = async (credentials: RegisterCredentials) => {
     try {
       const response = await authService.register(credentials);
-      
       const { token, user: apiUser } = response;
 
       localStorage.setItem('lignum_token', token);
       localStorage.setItem('lignum_user', JSON.stringify(apiUser));
-      
+      api.defaults.headers.common['Authorization'] = `Bearer ${token}`;
       setUser(apiUser);
     } catch (error) {
-      console.error("Erro no contexto de cadastro:", error);
       throw error;
     }
   };
@@ -77,18 +80,20 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
   const signOut = () => {
     localStorage.removeItem('lignum_token');
     localStorage.removeItem('lignum_user');
+    delete api.defaults.headers.common['Authorization'];
     setUser(null);
   };
 
+  const updateUser = (updatedData: Partial<User>) => {
+    if (user) {
+        const newUser = { ...user, ...updatedData };
+        setUser(newUser);
+        localStorage.setItem('lignum_user', JSON.stringify(newUser));
+    }
+  };
+
   return (
-    <AuthContext.Provider value={{ 
-      user, 
-      isAuthenticated: !!user, 
-      signIn, 
-      signUp, 
-      signOut,
-      loading 
-    }}>
+    <AuthContext.Provider value={{ user, isAuthenticated: !!user, signIn, signUp, signOut, updateUser, loading }}>
       {children}
     </AuthContext.Provider>
   );
@@ -96,6 +101,7 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
 
 export const useAuth = () => {
   const context = useContext(AuthContext);
+  // Garante que o hook só funcione se estiver dentro do Provider
   if (!context) {
     throw new Error('useAuth deve ser usado dentro de um AuthProvider');
   }

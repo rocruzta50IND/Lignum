@@ -1,5 +1,6 @@
 import React, { useState } from 'react';
 import { useAuth } from '../contexts/AuthContext';
+import { useNavigate } from 'react-router-dom'; // <--- 1. Importação necessária
 
 interface LoginProps {
   onNavigateToRegister: () => void;
@@ -7,6 +8,8 @@ interface LoginProps {
 
 export const Login: React.FC<LoginProps> = ({ onNavigateToRegister }) => {
   const { signIn } = useAuth();
+  const navigate = useNavigate(); // <--- 2. Hook de navegação
+  
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [error, setError] = useState('');
@@ -17,8 +20,12 @@ export const Login: React.FC<LoginProps> = ({ onNavigateToRegister }) => {
     setError('');
     setIsLoading(true);
     try {
-      // CORREÇÃO AQUI: Passando como objeto { email, password }
+      // Passando como objeto { email, password }
       await signIn({ email, password });
+      
+      // <--- 3. Redireciona para o Dashboard após sucesso
+      navigate('/'); 
+      
     } catch (err) {
       console.error(err);
       setError('Credenciais inválidas. Tente novamente.');

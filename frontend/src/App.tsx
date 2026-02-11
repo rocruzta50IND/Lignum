@@ -7,12 +7,12 @@ import { ChatSidebar } from './components/Chat/ChatSidebar';
 import { Dashboard } from './pages/Dashboard';
 import { Login } from './pages/Login';
 import { Register } from './pages/Register';
-import { Header } from './components/Header'; // Importe o Header Global
+import { Header } from './components/Header';
+import { Profile } from './pages/Profile'; // Importado corretamente
 
 // --- LAYOUT GLOBAL (Header + Conteúdo) ---
 const MainLayout = () => {
     return (
-        // DESIGN: Usando as novas cores de fundo base
         <div className="h-screen w-screen flex flex-col bg-[#F8FAFC] dark:bg-[#0F1117] transition-colors font-sans">
             <Header /> 
             <div className="flex-1 overflow-hidden relative flex">
@@ -29,12 +29,12 @@ const BoardView = () => {
 
   return (
     <div className="flex w-full h-full">
-      {/* Sidebar Chat: Largura fixa, borda sutil e cor de fundo de superfície */}
+      {/* Sidebar Chat */}
       <div className="hidden md:flex h-full border-r border-gray-200/80 dark:border-gray-800/80 w-[320px] flex-shrink-0 bg-white dark:bg-[#16181D] relative z-10 shadow-sm">
         <ChatSidebar boardId={boardId} />
       </div>
 
-      {/* Área do Kanban: Fundo ligeiramente diferente para contraste */}
+      {/* Área do Kanban */}
       <div className="flex-1 h-full min-w-0 bg-[#F1F5F9] dark:bg-[#0F1117] relative transition-colors">
           <Board initialBoardId={boardId} />
       </div>
@@ -83,6 +83,10 @@ function App() {
                     
                     {/* Board -> Visualização com Sidebar */}
                     <Route path="/board/:boardId" element={<BoardView />} />
+                    
+                    {/* --- CORREÇÃO: ROTA DE PERFIL ADICIONADA --- */}
+                    <Route path="/profile" element={<Profile />} />
+                    
                 </Route>
 
                 <Route path="*" element={<Navigate to="/" />} />
