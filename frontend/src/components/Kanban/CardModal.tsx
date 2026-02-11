@@ -1,43 +1,128 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { api } from '../../services/api';
 import type { Card, ChecklistItem, Comment } from '../../types';
+import { UserAvatar } from '../UserAvatar'; // <--- Já importado
+import { useAuth } from '../../contexts/AuthContext'; // <--- Necessário para pegar o user logado
+import { SuccessModal } from '../SuccessModal'; // <--- Importando o Modal de Sucesso
 
 interface CardModalProps {
-  isOpen: boolean; card: Card; boardId: string; onClose: () => void; onUpdateLocal: (card: Card) => void; onDelete: () => void;
+  isOpen: boolean; 
+  card: Card; 
+  boardId: string; 
+  onClose: () => void; 
+  onUpdateLocal: (card: Card) => void; 
+  onDelete: () => void;
 }
 
 export const CardModal: React.FC<CardModalProps> = ({ isOpen, card, boardId, onClose, onUpdateLocal, onDelete }) => {
   if (!isOpen) return null;
+
+  const { user } = useAuth(); // Pegando usuário logado para o avatar
+
+  // States do formulário
   const [title, setTitle] = useState(card.title);
   const [description, setDescription] = useState(card.description || '');
   const [priority, setPriority] = useState(card.priority || 'Baixa');
   const [dueDate, setDueDate] = useState(card.dueDate ? card.dueDate.split('T')[0] : '');
+  
+  // Checklist e Comentários
   const [checklist, setChecklist] = useState<ChecklistItem[]>(card.checklist || []);
   const [newChecklistItem, setNewChecklistItem] = useState('');
   const [comments, setComments] = useState<Comment[]>(card.comments || []);
   const [newComment, setNewComment] = useState('');
+  
+  // UX States
   const [isDeleting, setIsDeleting] = useState(false);
+  const [showSuccess, setShowSuccess] = useState(false); // State para o modal de sucesso
+  
   const commentInputRef = useRef<HTMLTextAreaElement>(null);
 
-  useEffect(() => { setTitle(card.title); setDescription(card.description || ''); setPriority(card.priority || 'Baixa'); setDueDate(card.dueDate ? card.dueDate.split('T')[0] : ''); setChecklist(card.checklist || []); setComments(card.comments || []); setIsDeleting(false); }, [card]);
-  const addChecklistItem = () => { if (!newChecklistItem.trim()) return; const newItem: ChecklistItem = { id: crypto.randomUUID(), text: newChecklistItem, isChecked: false }; setChecklist([...checklist, newItem]); setNewChecklistItem(''); };
-  const toggleCheckitem = (itemId: string) => { setChecklist(prev => prev.map(item => item.id === itemId ? { ...item, isChecked: !item.isChecked } : item)); };
-  const deleteCheckitem = (itemId: string) => { setChecklist(prev => prev.filter(item => item.id !== itemId)); };
-  const addComment = () => { if (!newComment.trim()) return; const comment: Comment = { id: crypto.randomUUID(), userId: 'user-current', userName: 'Eu', content: newComment, createdAt: new Date().toISOString() }; setComments([comment, ...comments]); setNewComment(''); };
-  const handleSave = async () => { try { const payload = { title, description, priority, dueDate: dueDate || null, checklist, comments, columnId: card.columnId }; const res = await api.put(`/cards/${card.id}`, payload); onUpdateLocal(res.data); onClose(); } catch (e) { console.error(e); } };
+  // Resetar states ao abrir card diferente
+  useEffect(() => { 
+      setTitle(card.title); 
+      setDescription(card.description || ''); 
+      setPriority(card.priority || 'Baixa'); 
+      setDueDate(card.dueDate ? card.dueDate.split('T')[0] : ''); 
+      setChecklist(card.checklist || []); 
+      setComments(card.comments || []); 
+      setIsDeleting(false); 
+      setShowSuccess(false);
+  }, [card]);
+
+  // Lógica Checklist
+  const addChecklistItem = () => { 
+      if (!newChecklistItem.trim()) return; 
+      const newItem: ChecklistItem = { id: crypto.randomUUID(), text: newChecklistItem, isChecked: false }; 
+      setChecklist([...checklist, newItem]); 
+      setNewChecklistItem(''); 
+  };
+  const toggleCheckitem = (itemId: string) => { 
+      setChecklist(prev => prev.map(item => item.id === itemId ? { ...item, isChecked: !item.isChecked } : item)); 
+  };
+  const deleteCheckitem = (itemId: string) => { 
+      setChecklist(prev => prev.filter(item => item.id !== itemId)); 
+  };
+
+  // Lógica Comentários
+  const addComment = () => { 
+      if (!newComment.trim() || !user) return; 
+      
+      const comment: Comment = { 
+          id: crypto.randomUUID(), 
+          userId: user.id, 
+          userName: user.name, 
+          // Importante: Se o backend suportar salvar avatar no comentário, adicione aqui. 
+          // Se não, o UserAvatar vai tentar resolver pelo nome ou precisaremos atualizar o tipo Comment.
+          // Por enquanto vamos assumir que o UserAvatar resolverá visualmente na lista se tivermos os dados.
+          content: newComment, 
+          createdAt: new Date().toISOString() 
+      }; 
+      setComments([comment, ...comments]); 
+      setNewComment(''); 
+  };
+
+  // Salvar
+  const handleSave = async () => { 
+      try { 
+          const payload = { title, description, priority, dueDate: dueDate || null, checklist, comments, columnId: card.columnId }; 
+          const res = await api.put(`/cards/${card.id}`, payload); 
+          
+          onUpdateLocal(res.data); 
+          
+          // <--- AQUI: Mostra sucesso em vez de fechar direto
+          setShowSuccess(true);
+          
+      } catch (e) { 
+          console.error(e); 
+          alert("Erro ao salvar card.");
+      } 
+  };
+
+  const handleCloseSuccess = () => {
+      setShowSuccess(false);
+      onClose(); // Fecha o modal principal só depois de fechar o de sucesso
+  };
+
   const progress = checklist.length > 0 ? Math.round((checklist.filter(i => i.isChecked).length / checklist.length) * 100) : 0;
 
   return (
-    // DESIGN: Backdrop com blur pesado e cor escura suave
+    <>
+    {/* Modal de Sucesso sobreposto */}
+    <SuccessModal 
+        isOpen={showSuccess} 
+        onClose={handleCloseSuccess} 
+        title="Card Atualizado!" 
+        message="Todas as alterações foram salvas." 
+    />
+
     <div className="fixed inset-0 z-[99999] flex items-center justify-center p-4 animate-in fade-in duration-200">
       <div className="absolute inset-0 bg-[#0F1117]/60 backdrop-blur-md" onClick={onClose}></div>
-      {/* DESIGN: Modal com cantos muito arredondados (3xl), sombra profunda e borda sutil */}
+      
       <div className="w-full max-w-4xl bg-white dark:bg-[#16181D] rounded-3xl shadow-2xl overflow-hidden flex flex-col max-h-[90vh] transition-colors relative z-10 border border-gray-100 dark:border-gray-800 scale-in-95 animate-in duration-200">
         
         {/* HEADER */}
         <div className="flex justify-between items-start p-6 border-b border-gray-100 dark:border-gray-800/50 bg-gray-50/50 dark:bg-[#1F222A]/50">
             <div className="flex-1 mr-6">
-                {/* Input de Título Transparente e Gigante */}
                 <input value={title} onChange={(e) => setTitle(e.target.value)} className="text-3xl font-extrabold text-gray-800 dark:text-white bg-transparent border-none outline-none focus:ring-0 p-0 w-full tracking-tight placeholder:text-gray-300" placeholder="Título da tarefa" />
                 <div className="flex items-center gap-2 mt-2 text-sm text-gray-500 dark:text-gray-400 font-medium">
                     <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}><path strokeLinecap="round" strokeLinejoin="round" d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2" /></svg>
@@ -61,7 +146,7 @@ export const CardModal: React.FC<CardModalProps> = ({ isOpen, card, boardId, onC
                     <textarea value={description} onChange={(e) => setDescription(e.target.value)} rows={4} placeholder="Adicione uma descrição mais detalhada..." className="w-full bg-white dark:bg-[#1F222A] border border-gray-200 dark:border-gray-700 rounded-xl p-4 text-gray-800 dark:text-gray-100 focus:outline-none focus:ring-2 focus:ring-rose-500/50 focus:border-rose-500 transition-all resize-none shadow-sm text-sm leading-relaxed" />
                 </div>
 
-                {/* Checklist (Redesenhada) */}
+                {/* Checklist */}
                 <div>
                     <div className="flex items-center justify-between mb-4">
                         <h3 className="flex items-center gap-3 text-xs font-bold text-gray-500 dark:text-gray-400 uppercase tracking-wider">
@@ -92,14 +177,16 @@ export const CardModal: React.FC<CardModalProps> = ({ isOpen, card, boardId, onC
                     </div>
                 </div>
 
-                {/* Comentários (Redesenhado) */}
+                {/* Comentários */}
                 <div>
                     <h3 className="flex items-center gap-3 text-xs font-bold text-gray-500 dark:text-gray-400 uppercase tracking-wider mb-6">
                         <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}><path strokeLinecap="round" strokeLinejoin="round" d="M8 10h.01M12 10h.01M16 10h.01M9 16H5a2 2 0 01-2-2V6a2 2 0 012-2h14a2 2 0 012 2v8a2 2 0 01-2 2h-5l-5 5v-5z" /></svg>
                         Atividade
                     </h3>
                     <div className="flex gap-4 mb-8">
-                        <div className="w-10 h-10 rounded-full bg-gradient-to-tr from-rose-500 to-orange-500 flex items-center justify-center text-white font-bold text-sm shadow-md">EU</div>
+                        {/* Avatar do usuário logado (EU) */}
+                        <UserAvatar user={user} size="md" />
+                        
                         <div className="flex-1 relative">
                             <textarea ref={commentInputRef} value={newComment} onChange={(e) => setNewComment(e.target.value)} placeholder="Escreva um comentário..." className="w-full bg-white dark:bg-[#1F222A] border border-gray-200 dark:border-gray-700 rounded-xl p-4 text-sm text-gray-800 dark:text-white focus:ring-2 focus:ring-rose-500/50 focus:border-rose-500 focus:outline-none resize-none shadow-sm transition-all pb-12" rows={3} />
                             {newComment && <button onClick={addComment} className="absolute right-3 bottom-3 bg-rose-600 hover:bg-rose-700 text-white px-4 py-1.5 rounded-lg text-xs font-bold transition-all shadow-sm hover:shadow-md hover:scale-105 active:scale-95">Comentar</button>}
@@ -108,9 +195,9 @@ export const CardModal: React.FC<CardModalProps> = ({ isOpen, card, boardId, onC
                     <div className="space-y-6">
                         {comments.map(comment => (
                             <div key={comment.id} className="flex gap-4 group">
-                                <div className="w-10 h-10 rounded-full bg-gray-200 dark:bg-gray-700 flex items-center justify-center text-gray-600 dark:text-gray-300 font-bold text-sm border-2 border-white dark:border-[#1F222A] shadow-sm">
-                                    {comment.userName.substring(0,2).toUpperCase()}
-                                </div>
+                                {/* Avatar do autor do comentário */}
+                                <UserAvatar name={comment.userName} size="md" />
+                                
                                 <div className="flex-1">
                                     <div className="flex items-center gap-2 mb-1"><span className="font-bold text-sm text-gray-800 dark:text-white">{comment.userName}</span><span className="text-xs text-gray-400 font-medium">{new Date(comment.createdAt).toLocaleString()}</span></div>
                                     <div className="text-sm text-gray-700 dark:text-gray-200 p-3 bg-white dark:bg-[#1F222A] rounded-xl border border-gray-100 dark:border-gray-800/50 shadow-sm leading-relaxed">{comment.content}</div>
@@ -123,7 +210,7 @@ export const CardModal: React.FC<CardModalProps> = ({ isOpen, card, boardId, onC
 
             {/* COLUNA DIREITA (Sidebar do Modal) */}
             <div className="space-y-8">
-                {/* Seletor de Prioridade (Estilo Botões Segmentados) */}
+                {/* Seletor de Prioridade */}
                 <div>
                     <label className="block text-xs font-bold text-gray-500 dark:text-gray-400 uppercase mb-3">Prioridade</label>
                     <div className="flex flex-col gap-2 p-1 bg-gray-100 dark:bg-[#1F222A] rounded-xl border border-gray-200 dark:border-gray-800/50">
@@ -144,7 +231,7 @@ export const CardModal: React.FC<CardModalProps> = ({ isOpen, card, boardId, onC
                 </div>
                 <hr className="border-gray-200 dark:border-gray-800/50 my-6" />
                 
-                {/* Botões de Ação (Excluir e Salvar) */}
+                {/* Botões de Ação */}
                 <div className="space-y-3">
                     {!isDeleting ? (
                         <button onClick={() => setIsDeleting(true)} className="w-full text-red-500 hover:bg-red-50 dark:hover:bg-red-900/20 font-bold py-3 px-4 rounded-xl transition-colors text-sm flex items-center justify-center gap-2 border border-red-100 dark:border-red-900/30">
@@ -169,5 +256,6 @@ export const CardModal: React.FC<CardModalProps> = ({ isOpen, card, boardId, onC
         </div>
       </div>
     </div>
+    </>
   );
 };

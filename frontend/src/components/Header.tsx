@@ -4,6 +4,7 @@ import { useTheme } from '../contexts/ThemeContext';
 import { useNavigate } from 'react-router-dom';
 import { api } from '../services/api';
 import { NotificationsMenu } from './NotificationsMenu';
+import { UserAvatar } from './UserAvatar'; // Novo componente para avatar
 
 export const Header: React.FC = () => {
   const { user, signOut } = useAuth();
@@ -78,16 +79,11 @@ export const Header: React.FC = () => {
             {/* AVATAR -> VAI PARA PERFIL */}
             <button 
                 onClick={() => navigate('/profile')}
-                className="w-10 h-10 rounded-full bg-gradient-to-tr from-rose-100 to-orange-100 dark:from-rose-900/50 dark:to-orange-900/50 p-0.5 cursor-pointer hover:ring-2 hover:ring-rose-500 transition-all"
+                className="hover:opacity-80 transition-opacity"
                 title="Meu Perfil"
             >
-                <div className="w-full h-full rounded-full bg-white dark:bg-[#1F222A] flex items-center justify-center overflow-hidden">
-                    {user?.avatar ? (
-                        <img src={user.avatar} alt="Avatar" className="w-full h-full object-cover" />
-                    ) : (
-                        <span className="text-sm font-bold text-rose-500">{user?.name?.substring(0, 2).toUpperCase()}</span>
-                    )}
-                </div>
+                {/* Agora usamos o componente único! */}
+                <UserAvatar user={user} size="md" />
             </button>
             
             {/* ENGRENAGEM (SETTINGS MENU) */}
