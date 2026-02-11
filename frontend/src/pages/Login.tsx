@@ -62,7 +62,6 @@ export const Login: React.FC<LoginProps> = ({ onNavigateToRegister }) => {
                 <div>
                     <div className="flex justify-between items-center mb-2">
                         <label className="block text-xs font-bold text-gray-500 uppercase tracking-wider">Senha</label>
-                        <a href="#" className="text-xs font-bold text-rose-600 hover:text-rose-700 transition-colors">Esqueceu a senha?</a>
                     </div>
                     <input 
                         type="password" 
@@ -122,7 +121,7 @@ export const Login: React.FC<LoginProps> = ({ onNavigateToRegister }) => {
             </p>
             
             <div className="mt-12 inline-flex items-center gap-2 px-4 py-1.5 rounded-full bg-white/5 border border-white/10 text-white/40 text-xs font-mono tracking-wider uppercase">
-                <span>Sistema Lignum V2.0</span>
+                <span>Sistema Kanban</span>
             </div>
         </div>
       </div>
