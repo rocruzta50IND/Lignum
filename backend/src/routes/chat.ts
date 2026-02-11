@@ -6,22 +6,20 @@ import { getIO } from '../lib/socket';
 const chatRoutes: FastifyPluginAsync = async (app) => {
   
   // LISTAR MENSAGENS (Histórico)
-  app.get('/:boardId', { onRequest: [app.authenticate] }, async (req: any, reply) => {
-    const { boardId } = req.params;
-    try {
-      // Busca as últimas 50 mensagens com dados do usuário
-      const result = await pool.query(`
-        SELECT m.*, u.name as user_name, u.email as user_email
-        FROM messages m
-        JOIN users u ON m.user_id = u.id
-        WHERE m.board_id = $1
-        ORDER BY m.created_at ASC
-        LIMIT 50
-      `, [boardId]);
-      return result.rows;
-    } catch (err) {
-      return reply.code(500).send(err);
-    }
+  app.get('/:boardId', { onRequest: [app.authenticate] }, async (req, reply) => {
+    const { boardId } = req.params as any;
+    
+    // Busca mensagens com dados do usuário (nome e avatar)
+    const result = await pool.query(
+      `SELECT m.id, m.content, m.created_at, m.user_id, u.name as user_name, u.avatar as user_avatar
+       FROM messages m
+       JOIN users u ON m.user_id = u.id
+       WHERE m.board_id = $1
+       ORDER BY m.created_at ASC`,
+      [boardId]
+    );
+    
+    return result.rows;
   });
 
   // ENVIAR MENSAGEM
@@ -29,7 +27,6 @@ const chatRoutes: FastifyPluginAsync = async (app) => {
     const { boardId } = req.params;
     const userId = req.user.id;
     
-    // Schema: Recebe o conteúdo e uma lista de IDs mencionados (opcional)
     const bodySchema = z.object({
         content: z.string().min(1),
         mentionedUserIds: z.array(z.string()).optional() 
@@ -47,22 +44,21 @@ const chatRoutes: FastifyPluginAsync = async (app) => {
         );
         const savedMsg = res.rows[0];
 
-        // 2. Buscar dados do autor para enviar no socket
-        const userRes = await client.query('SELECT name FROM users WHERE id = $1', [userId]);
-        const userName = userRes.rows[0].name;
+        // 2. CORREÇÃO: Buscar Nome E AVATAR do autor para enviar no socket
+        const userRes = await client.query('SELECT name, avatar FROM users WHERE id = $1', [userId]);
+        const user = userRes.rows[0];
 
         // 3. Processar Notificações de Menção
         if (body.mentionedUserIds && body.mentionedUserIds.length > 0) {
             for (const mentionedId of body.mentionedUserIds) {
-                // Não notifica se o usuário marcou a si mesmo
                 if (mentionedId !== userId) {
                     await client.query(
                         `INSERT INTO notifications (user_id, type, content, resource_link) 
                          VALUES ($1, 'mention', $2, $3)`,
                         [
                             mentionedId, 
-                            `${userName} te mencionou no chat: "${body.content.substring(0, 30)}..."`,
-                            `/board/${boardId}` // Link para voltar ao board
+                            `${user.name} te mencionou no chat: "${body.content.substring(0, 30)}..."`,
+                            `/board/${boardId}`
                         ]
                     );
                 }
@@ -71,11 +67,13 @@ const chatRoutes: FastifyPluginAsync = async (app) => {
 
         await client.query('COMMIT');
 
-        // 4. Emitir evento via Socket para todos na sala
+        // 4. Emitir evento via Socket com TODOS os dados visuais
         const msgPayload = {
             ...savedMsg,
-            user_name: userName
+            user_name: user.name,
+            user_avatar: user.avatar // <--- IMPORTANTE: Enviando a foto em tempo real
         };
+        
         getIO().to(boardId).emit('receive_message', msgPayload);
 
         return reply.status(201).send(msgPayload);

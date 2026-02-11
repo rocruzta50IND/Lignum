@@ -2,16 +2,23 @@ import React, { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { api } from '../services/api';
 import { useTheme } from '../contexts/ThemeContext';
-import { BoardSettingsModal } from '../components/BoardSettingsModal'; // Importe o Modal
+import { BoardSettingsModal } from '../components/BoardSettingsModal';
+import { UserAvatar } from '../components/UserAvatar'; // <--- 1. Importação
 
-interface User { id: string; name: string; email: string; }
+interface User { 
+    id: string; 
+    name: string; 
+    email: string; 
+    avatar?: string; // <--- 2. Adicionado campo avatar
+}
+
 interface BoardSummary {
   id: string;
   title: string;
   background_color: string;
-  members: User[]; // Agora o backend retorna membros
+  members: User[];
+  created_by: string; // <--- ADICIONE ESTA LINHA IMPORTANTE
 }
-
 export const Dashboard: React.FC = () => {
   const navigate = useNavigate();
   const { theme } = useTheme();
@@ -27,7 +34,7 @@ export const Dashboard: React.FC = () => {
   const [selectedMembers, setSelectedMembers] = useState<string[]>([]);
   const [isLoadingUsers, setIsLoadingUsers] = useState(false);
 
-  // NOVO: States Modal Settings
+  // States Modal Settings
   const [editingBoard, setEditingBoard] = useState<BoardSummary | null>(null);
 
   const colorOptions = [
@@ -60,12 +67,11 @@ export const Dashboard: React.FC = () => {
     e.preventDefault();
     if (!newBoardTitle.trim()) return;
     try {
-      const res = await api.post('/boards', { 
+      await api.post('/boards', { 
           title: newBoardTitle, 
           background_color: selectedColor,
           members: selectedMembers 
       });
-      // Recarrega tudo para garantir dados frescos
       fetchBoards(); 
       setIsCreating(false);
       setNewBoardTitle("");
@@ -76,9 +82,8 @@ export const Dashboard: React.FC = () => {
       setSelectedMembers(prev => prev.includes(userId) ? prev.filter(id => id !== userId) : [...prev, userId]);
   };
 
-  // Handler para abrir configurações
   const openSettings = (e: React.MouseEvent, board: BoardSummary) => {
-      e.stopPropagation(); // Impede entrar no quadro
+      e.stopPropagation();
       setEditingBoard(board);
   };
 
@@ -86,9 +91,7 @@ export const Dashboard: React.FC = () => {
     <div className="flex-1 p-8 md:p-12 overflow-y-auto bg-[#F8FAFC] dark:bg-[#0F1117] transition-colors h-full font-sans">
       <main className="max-w-7xl mx-auto">
         <div className="flex items-center gap-4 mb-10 opacity-90">
-            {/* Container do ícone com tamanho fixo e centralizado */}
             <div className="w-12 h-12 min-w-[3rem] min-h-[3rem] flex-shrink-0 rounded-2xl bg-white dark:bg-[#1F222A] text-rose-500 shadow-sm border border-gray-100 dark:border-gray-800 flex items-center justify-center">
-                {/* Novo ícone de Pasta (Folder) com design limpo */}
                 <svg className="w-6 h-6" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
                     <path strokeLinecap="round" strokeLinejoin="round" d="M3 7v10a2 2 0 002 2h14a2 2 0 002-2V9a2 2 0 00-2-2h-6l-2-2H5a2 2 0 00-2 2z" />
                 </svg>
@@ -118,7 +121,6 @@ export const Dashboard: React.FC = () => {
                 >
                     <div className="absolute left-0 top-0 bottom-0 w-1.5 transition-all group-hover:w-2" style={{ backgroundColor: accentColor }}></div>
 
-                    {/* BOTÃO DE SETTINGS (ENGRENAGEM) NOVO */}
                     <button 
                         onClick={(e) => openSettings(e, board)}
                         className="absolute top-3 right-3 p-1.5 rounded-lg text-gray-300 hover:text-gray-600 dark:hover:text-white hover:bg-gray-100 dark:hover:bg-white/10 transition-colors opacity-0 group-hover:opacity-100 z-10"
@@ -137,13 +139,25 @@ export const Dashboard: React.FC = () => {
                     </div>
                     
                     <div className="pl-2 flex items-center justify-between mt-auto pt-4">
-                        <div className="flex -space-x-2 overflow-hidden">
-                            {members.map((m: any, i: number) => (
-                                <div key={m.id || i} title={m.name} className="inline-flex h-7 w-7 rounded-full ring-2 ring-white dark:ring-[#1E2028] bg-gray-200 dark:bg-gray-600 items-center justify-center text-[9px] font-bold text-gray-600 dark:text-gray-300 uppercase">
-                                    {m.name ? m.name.substring(0, 2) : '??'}
+                        {/* 3. CORREÇÃO: Usando UserAvatar em vez de div */}
+                        <div className="flex -space-x-2 overflow-hidden items-center">
+                            {members.slice(0, 4).map((m: any, i: number) => (
+                                // REMOVIDO: hover:scale-110, hover:z-10, transition-all, relative
+                                <div key={m.id || i} className="ring-2 ring-white dark:ring-[#1E2028] rounded-full">
+                                    <UserAvatar 
+                                        user={m} 
+                                        size="sm"
+                                        className="w-7 h-7 text-[10px]"
+                                    />
                                 </div>
                             ))}
+                            {members.length > 4 && (
+                                <div className="w-7 h-7 rounded-full ring-2 ring-white dark:ring-[#1E2028] bg-gray-100 dark:bg-gray-700 flex items-center justify-center text-[9px] font-bold text-gray-500 z-0">
+                                    +{members.length - 4}
+                                </div>
+                            )}
                         </div>
+
                         <div className="opacity-0 group-hover:opacity-100 transition-all transform translate-x-2 group-hover:translate-x-0 text-gray-400 group-hover:text-gray-600 dark:group-hover:text-gray-300">
                             <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}><path strokeLinecap="round" strokeLinejoin="round" d="M17 8l4 4m0 0l-4 4m4-4H3" /></svg>
                         </div>
@@ -153,7 +167,6 @@ export const Dashboard: React.FC = () => {
         </div>
       </main>
 
-      {/* Modal de Configurações */}
       {editingBoard && (
           <BoardSettingsModal 
             isOpen={!!editingBoard} 
@@ -163,7 +176,6 @@ export const Dashboard: React.FC = () => {
           />
       )}
 
-      {/* Modal de Criação (Mantido Igual) */}
       {isCreating && (
         <div className="fixed inset-0 z-[999] flex items-center justify-center p-4 animate-in fade-in duration-200">
             <div className="absolute inset-0 bg-[#0F1117]/60 backdrop-blur-sm" onClick={() => setIsCreating(false)}></div>
@@ -192,8 +204,12 @@ export const Dashboard: React.FC = () => {
                             {isLoadingUsers ? (<div className="p-4 text-center text-xs text-gray-400">Carregando usuários...</div>) : availableUsers.length === 0 ? (<div className="p-4 text-center text-xs text-gray-400">Nenhum outro usuário encontrado.</div>) : (
                                 availableUsers.map(user => (
                                     <div key={user.id} onClick={() => toggleMember(user.id)} className={`flex items-center gap-3 p-3 cursor-pointer transition-colors border-b border-gray-100 dark:border-gray-800 last:border-0 ${selectedMembers.includes(user.id) ? 'bg-rose-50 dark:bg-rose-900/20' : 'hover:bg-gray-100 dark:hover:bg-[#1F222A]'}`}>
-                                        <div className={`w-5 h-5 rounded border flex items-center justify-center transition-all ${selectedMembers.includes(user.id) ? 'bg-rose-500 border-rose-500' : 'border-gray-300 dark:border-gray-600'}`}>{selectedMembers.includes(user.id) && <svg className="w-3.5 h-3.5 text-white" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={3}><path strokeLinecap="round" strokeLinejoin="round" d="M5 13l4 4L19 7" /></svg>}</div>
-                                        <div className="flex-1 min-w-0"><p className={`text-sm font-bold truncate ${selectedMembers.includes(user.id) ? 'text-rose-700 dark:text-rose-300' : 'text-gray-700 dark:text-gray-300'}`}>{user.name}</p><p className="text-xs text-gray-400 truncate">{user.email}</p></div>
+                                            <div className={`w-5 h-5 rounded border flex items-center justify-center transition-all ${selectedMembers.includes(user.id) ? 'bg-rose-500 border-rose-500' : 'border-gray-300 dark:border-gray-600'}`}>{selectedMembers.includes(user.id) && <svg className="w-3.5 h-3.5 text-white" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={3}><path strokeLinecap="round" strokeLinejoin="round" d="M5 13l4 4L19 7" /></svg>}</div>
+                                            
+                                            {/* Avatar na lista de seleção (opcional, mas legal) */}
+                                            <UserAvatar user={user} size="xs" className="w-6 h-6 text-[9px]" />
+
+                                            <div className="flex-1 min-w-0"><p className={`text-sm font-bold truncate ${selectedMembers.includes(user.id) ? 'text-rose-700 dark:text-rose-300' : 'text-gray-700 dark:text-gray-300'}`}>{user.name}</p><p className="text-xs text-gray-400 truncate">{user.email}</p></div>
                                     </div>
                                 ))
                             )}

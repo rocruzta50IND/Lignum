@@ -1,8 +1,9 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { api } from '../services/api';
 import { useAuth } from '../contexts/AuthContext';
+import { UserAvatar } from './UserAvatar'; // <--- 1. Usando Avatar Oficial
 
-interface User { id: string; name: string; email: string; }
+interface User { id: string; name: string; email: string; avatar?: string; }
 interface BoardSettingsModalProps {
   isOpen: boolean;
   onClose: () => void;
@@ -15,36 +16,32 @@ export const BoardSettingsModal: React.FC<BoardSettingsModalProps> = ({ isOpen, 
   if (!isOpen) return null;
 
   const [activeTab, setActiveTab] = useState<'members' | 'danger'>('members');
-  
-  // ESTADO LOCAL DE MEMBROS (Para atualização instantânea)
   const [members, setMembers] = useState<User[]>(board.members || []);
-
   const [availableUsers, setAvailableUsers] = useState<User[]>([]);
   
-  // States do Select
+  // Select
   const [selectedUserId, setSelectedUserId] = useState("");
   const [isSelectOpen, setIsSelectOpen] = useState(false);
   const selectRef = useRef<HTMLDivElement>(null);
 
-  // Modal de Confirmação Interno
+  // Modais Internos
   const [memberToRemove, setMemberToRemove] = useState<User | null>(null);
-
   const [deleteConfirmation, setDeleteConfirmation] = useState("");
   const [isLoading, setIsLoading] = useState(false);
 
-  // Sincroniza o estado local se a prop mudar (ex: ao abrir outro quadro)
+  // Quem sou eu nesse quadro?
+  const isOwner = board.created_by === user?.id; 
+
   useEffect(() => {
       setMembers(board.members || []);
   }, [board.members]);
 
-  // Busca usuários para adicionar
   useEffect(() => {
       if (isOpen) {
           api.get('/users').then(res => setAvailableUsers(res.data));
       }
   }, [isOpen]);
 
-  // Click Outside do Select
   useEffect(() => {
       const handleClickOutside = (event: MouseEvent) => {
           if (selectRef.current && !selectRef.current.contains(event.target as Node)) {
@@ -55,19 +52,18 @@ export const BoardSettingsModal: React.FC<BoardSettingsModalProps> = ({ isOpen, 
       return () => document.removeEventListener('mousedown', handleClickOutside);
   }, [isSelectOpen]);
 
+  // --- AÇÕES ---
+
   const handleAddMember = async () => {
       if (!selectedUserId) return;
       setIsLoading(true);
       try {
           await api.post(`/boards/${board.id}/members`, { userId: selectedUserId });
           
-          // ATUALIZAÇÃO VISUAL INSTANTÂNEA
           const userToAdd = availableUsers.find(u => u.id === selectedUserId);
-          if (userToAdd) {
-              setMembers(prev => [...prev, userToAdd]);
-          }
+          if (userToAdd) setMembers(prev => [...prev, userToAdd]);
 
-          onUpdate(); // Atualiza o pai em segundo plano
+          onUpdate();
           setSelectedUserId("");
           setIsSelectOpen(false);
       } catch (error) {
@@ -78,20 +74,13 @@ export const BoardSettingsModal: React.FC<BoardSettingsModalProps> = ({ isOpen, 
       }
   };
 
-  const confirmRemoveMember = (member: User) => {
-      setMemberToRemove(member);
-  };
-
   const executeRemoveMember = async () => {
       if (!memberToRemove) return;
       setIsLoading(true);
       try {
           await api.delete(`/boards/${board.id}/members/${memberToRemove.id}`);
-          
-          // ATUALIZAÇÃO VISUAL INSTANTÂNEA
           setMembers(prev => prev.filter(m => m.id !== memberToRemove.id));
-
-          onUpdate(); // Atualiza o pai em segundo plano
+          onUpdate();
           setMemberToRemove(null);
       } catch (error) {
           alert("Não foi possível remover este membro.");
@@ -114,11 +103,23 @@ export const BoardSettingsModal: React.FC<BoardSettingsModalProps> = ({ isOpen, 
       }
   };
 
-  const selectedUser = availableUsers.find(u => u.id === selectedUserId);
-  // Filtra usuários baseado na lista LOCAL ATUALIZADA 'members'
-  const filteredUsers = availableUsers.filter(u => !members.some(m => m.id === u.id));
+  // NOVA AÇÃO: Sair do Quadro
+  const handleLeaveBoard = async () => {
+      if (!window.confirm(`Sair do quadro "${board.title}"?`)) return;
+      setIsLoading(true);
+      try {
+          await api.delete(`/boards/${board.id}/members/${user?.id}`);
+          onUpdate();
+          onClose();
+      } catch (error) {
+          alert("Erro ao sair do quadro.");
+      } finally {
+          setIsLoading(false);
+      }
+  };
 
-  const isOwner = board.created_by === user?.id; 
+  const selectedUser = availableUsers.find(u => u.id === selectedUserId);
+  const filteredUsers = availableUsers.filter(u => !members.some(m => m.id === u.id));
 
   return (
     <div className="fixed inset-0 z-[999] flex items-center justify-center p-4 animate-in fade-in duration-200">
@@ -143,19 +144,16 @@ export const BoardSettingsModal: React.FC<BoardSettingsModalProps> = ({ isOpen, 
 
         <div className="p-6 overflow-y-auto custom-scrollbar overflow-x-hidden min-h-[350px] relative">
             
-            {/* Modal Interno de Remoção */}
+            {/* Modal Confirmação Remoção */}
             {memberToRemove && (
                 <div className="absolute inset-0 z-20 flex items-center justify-center bg-white/90 dark:bg-[#16181D]/90 backdrop-blur-sm animate-in fade-in duration-200 p-6">
-                    <div className="w-full bg-white dark:bg-[#1F222A] p-6 rounded-2xl shadow-2xl border border-gray-100 dark:border-gray-700 text-center transform scale-100 animate-in zoom-in-95">
-                        <div className="w-12 h-12 rounded-full bg-red-100 dark:bg-red-900/30 text-red-500 flex items-center justify-center mx-auto mb-4">
-                            <svg className="w-6 h-6" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}><path strokeLinecap="round" strokeLinejoin="round" d="M13 7a4 4 0 11-8 0 4 4 0 018 0zM9 14a6 6 0 00-6 6v1h12v-1a6 6 0 00-6-6zM21 12h-6" /></svg>
-                        </div>
+                    <div className="w-full bg-white dark:bg-[#1F222A] p-6 rounded-2xl shadow-2xl border border-gray-100 dark:border-gray-700 text-center animate-in zoom-in-95">
                         <h4 className="text-lg font-bold text-gray-800 dark:text-white mb-2">Remover membro?</h4>
                         <p className="text-sm text-gray-500 dark:text-gray-400 mb-6">
-                            Tem certeza que deseja remover <strong>{memberToRemove.name}</strong>? Ele perderá o acesso imediatamente.
+                            Tem certeza que deseja remover <strong>{memberToRemove.name}</strong>?
                         </p>
                         <div className="flex gap-3">
-                            <button onClick={() => setMemberToRemove(null)} className="flex-1 py-2.5 bg-gray-100 dark:bg-gray-800 text-gray-700 dark:text-gray-300 font-bold text-sm rounded-xl hover:bg-gray-200 dark:hover:bg-gray-700 transition-colors">Cancelar</button>
+                            <button onClick={() => setMemberToRemove(null)} className="flex-1 py-2.5 bg-gray-100 dark:bg-gray-800 text-gray-700 dark:text-gray-300 font-bold text-sm rounded-xl hover:bg-gray-200 transition-colors">Cancelar</button>
                             <button onClick={executeRemoveMember} disabled={isLoading} className="flex-1 py-2.5 bg-red-600 hover:bg-red-700 text-white font-bold text-sm rounded-xl shadow-lg shadow-red-500/20 transition-colors">{isLoading ? 'Removendo...' : 'Sim, remover'}</button>
                         </div>
                     </div>
@@ -165,23 +163,23 @@ export const BoardSettingsModal: React.FC<BoardSettingsModalProps> = ({ isOpen, 
             {/* ABA MEMBROS */}
             {activeTab === 'members' && (
                 <div className="space-y-6">
-                    {/* Add Member */}
+                    {/* Add Member (Só DONO vê o input de adicionar, ou todos? Normalmente só dono ou admin. Vou deixar livre mas você pode bloquear com !isOwner se quiser) */}
                     <div className="bg-gray-50 dark:bg-[#1F222A] p-4 rounded-xl border border-gray-100 dark:border-gray-800">
                         <label className="block text-xs font-bold text-gray-500 uppercase mb-2">Convidar novo membro</label>
                         <div className="flex gap-2">
                             <div ref={selectRef} className="relative flex-1">
                                 <button onClick={() => setIsSelectOpen(!isSelectOpen)} className={`w-full flex items-center justify-between bg-white dark:bg-[#16181D] border border-gray-200 dark:border-gray-700 rounded-xl px-4 py-2.5 text-sm outline-none transition-all ${isSelectOpen ? 'ring-2 ring-rose-500/20 border-rose-500' : ''}`}>
-                                    <span className={selectedUserId ? "text-gray-800 dark:text-white font-medium" : "text-gray-400"}>{selectedUserId ? `${selectedUser?.name}` : "Selecione um usuário..."}</span>
-                                    <svg className={`w-4 h-4 text-gray-400 transition-transform ${isSelectOpen ? 'rotate-180' : ''}`} fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}><path strokeLinecap="round" strokeLinejoin="round" d="M19 9l-7 7-7-7" /></svg>
+                                    <span className={selectedUserId ? "text-gray-800 dark:text-white font-medium" : "text-gray-400"}>{selectedUserId ? selectedUser?.name : "Selecione um usuário..."}</span>
+                                    <svg className={`w-4 h-4 text-gray-400 transition-transform ${isSelectOpen ? 'rotate-180' : ''}`} fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" /></svg>
                                 </button>
                                 {isSelectOpen && (
-                                    <div className="absolute top-full mt-2 w-full bg-white dark:bg-[#16181D] border border-gray-200 dark:border-gray-700 rounded-xl shadow-xl z-50 max-h-48 overflow-y-auto custom-scrollbar animate-in fade-in zoom-in-95 duration-100">
+                                    <div className="absolute top-full mt-2 w-full bg-white dark:bg-[#16181D] border border-gray-200 dark:border-gray-700 rounded-xl shadow-xl z-50 max-h-48 overflow-y-auto custom-scrollbar animate-in fade-in zoom-in-95">
                                         {filteredUsers.length === 0 ? (
                                             <div className="p-3 text-center text-xs text-gray-400">Nenhum usuário disponível.</div>
                                         ) : (
                                             filteredUsers.map(u => (
-                                                <div key={u.id} onClick={() => { setSelectedUserId(u.id); setIsSelectOpen(false); }} className="flex items-center gap-3 p-3 hover:bg-gray-50 dark:hover:bg-[#1F222A] cursor-pointer transition-colors border-b border-gray-50 dark:border-gray-800 last:border-0">
-                                                    <div className="w-8 h-8 rounded-full bg-gray-100 dark:bg-gray-800 flex items-center justify-center text-xs font-bold text-gray-500">{u.name.substring(0,2).toUpperCase()}</div>
+                                                <div key={u.id} onClick={() => { setSelectedUserId(u.id); setIsSelectOpen(false); }} className="flex items-center gap-3 p-3 hover:bg-gray-50 dark:hover:bg-[#252830] cursor-pointer transition-colors border-b border-gray-50 dark:border-gray-800 last:border-0">
+                                                    <UserAvatar user={u} size="sm" className="w-8 h-8 text-xs" />
                                                     <div className="text-left"><p className="text-sm font-bold text-gray-700 dark:text-gray-200">{u.name}</p><p className="text-xs text-gray-400">{u.email}</p></div>
                                                 </div>
                                             ))
@@ -193,20 +191,18 @@ export const BoardSettingsModal: React.FC<BoardSettingsModalProps> = ({ isOpen, 
                         </div>
                     </div>
 
-                    {/* Lista Atual (Renderizando o State 'members' em vez de 'board.members') */}
+                    {/* Lista Membros */}
                     <div>
                         <label className="block text-xs font-bold text-gray-500 uppercase mb-3">Membros Atuais ({members.length})</label>
                         <div className="space-y-2">
-                            {members.map((member: any) => {
+                            {members.map((member) => {
                                 const isMemberOwner = member.id === board.created_by; 
                                 const isMe = member.id === user?.id;
 
                                 return (
                                 <div key={member.id} className="flex items-center justify-between p-3 bg-white dark:bg-[#1F222A] border border-gray-100 dark:border-gray-800 rounded-xl group hover:border-gray-300 dark:hover:border-gray-600 transition-colors">
                                     <div className="flex items-center gap-3">
-                                        <div className={`w-8 h-8 rounded-full flex items-center justify-center text-xs font-bold border-2 ${isMemberOwner ? 'bg-yellow-100 text-yellow-600 border-yellow-200' : 'bg-gray-200 dark:bg-gray-700 text-gray-600 dark:text-gray-300 border-transparent'}`}>
-                                            {member.name.substring(0,2).toUpperCase()}
-                                        </div>
+                                        <UserAvatar user={member} size="sm" />
                                         <div>
                                             <p className="text-sm font-bold text-gray-800 dark:text-white flex items-center gap-2">
                                                 {member.name} 
@@ -216,10 +212,11 @@ export const BoardSettingsModal: React.FC<BoardSettingsModalProps> = ({ isOpen, 
                                         </div>
                                     </div>
                                     
-                                    {!isMemberOwner && (
+                                    {/* 2. LÓGICA DE PERMISSÃO: Só mostro a lixeira se EU for DONO e o alvo NÃO for eu */}
+                                    {isOwner && !isMe && (
                                         <button 
-                                            onClick={() => confirmRemoveMember(member)}
-                                            className="text-gray-400 hover:text-red-500 p-2 hover:bg-red-50 dark:hover:bg-red-900/20 rounded-lg transition-colors opacity-0 group-hover:opacity-100 focus:opacity-100"
+                                            onClick={() => setMemberToRemove(member)}
+                                            className="text-gray-400 hover:text-red-500 p-2 hover:bg-red-50 dark:hover:bg-red-900/20 rounded-lg transition-colors opacity-0 group-hover:opacity-100"
                                             title="Remover do quadro"
                                         >
                                             <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}><path strokeLinecap="round" strokeLinejoin="round" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" /></svg>
@@ -232,16 +229,25 @@ export const BoardSettingsModal: React.FC<BoardSettingsModalProps> = ({ isOpen, 
                 </div>
             )}
 
-            {/* ABA DANGER (Sem alterações) */}
+            {/* ABA DANGER */}
             {activeTab === 'danger' && (
                 <div className="space-y-6">
-                    <div className="bg-red-50 dark:bg-red-900/10 border border-red-100 dark:border-red-900/30 p-4 rounded-xl">
-                        <h4 className="text-red-700 dark:text-red-400 font-bold text-sm mb-2">Excluir este quadro permanentemente</h4>
-                        <p className="text-red-600/80 dark:text-red-400/70 text-xs leading-relaxed mb-4">Esta ação não pode ser desfeita.</p>
-                        <label className="block text-xs font-bold text-gray-500 dark:text-gray-400 uppercase mb-2">Digite <span className="select-all font-mono bg-gray-200 dark:bg-gray-800 px-1 rounded text-gray-800 dark:text-gray-200">{board.title}</span> para confirmar</label>
-                        <input value={deleteConfirmation} onChange={(e) => setDeleteConfirmation(e.target.value)} placeholder={board.title} className="w-full bg-white dark:bg-[#0F1117] border border-gray-300 dark:border-gray-700 rounded-xl px-3 py-2.5 text-sm outline-none focus:border-red-500 transition-colors mb-4 text-gray-800 dark:text-white" />
-                        <button onClick={handleDeleteBoard} disabled={deleteConfirmation !== board.title || isLoading} className="w-full bg-red-600 hover:bg-red-700 text-white font-bold py-2.5 rounded-xl text-sm shadow-lg shadow-red-500/20 disabled:opacity-50 disabled:cursor-not-allowed transition-all">{isLoading ? "Excluindo..." : "Entendo as consequências, excluir este quadro"}</button>
-                    </div>
+                    {/* 3. LÓGICA DE PERMISSÃO: Se sou DONO, vejo Excluir. Se NÃO, vejo Sair. */}
+                    {isOwner ? (
+                        <div className="bg-red-50 dark:bg-red-900/10 border border-red-100 dark:border-red-900/30 p-4 rounded-xl">
+                            <h4 className="text-red-700 dark:text-red-400 font-bold text-sm mb-2">Excluir este quadro permanentemente</h4>
+                            <p className="text-red-600/80 dark:text-red-400/70 text-xs leading-relaxed mb-4">Esta ação não pode ser desfeita.</p>
+                            <label className="block text-xs font-bold text-gray-500 dark:text-gray-400 uppercase mb-2">Digite <span className="select-all font-mono bg-gray-200 dark:bg-gray-800 px-1 rounded text-gray-800 dark:text-gray-200">{board.title}</span> para confirmar</label>
+                            <input value={deleteConfirmation} onChange={(e) => setDeleteConfirmation(e.target.value)} placeholder={board.title} className="w-full bg-white dark:bg-[#0F1117] border border-gray-300 dark:border-gray-700 rounded-xl px-3 py-2.5 text-sm outline-none focus:border-red-500 transition-colors mb-4 text-gray-800 dark:text-white" />
+                            <button onClick={handleDeleteBoard} disabled={deleteConfirmation !== board.title || isLoading} className="w-full bg-red-600 hover:bg-red-700 text-white font-bold py-2.5 rounded-xl text-sm shadow-lg shadow-red-500/20 disabled:opacity-50 disabled:cursor-not-allowed transition-all">{isLoading ? "Excluindo..." : "Entendo as consequências, excluir este quadro"}</button>
+                        </div>
+                    ) : (
+                        <div className="bg-orange-50 dark:bg-orange-900/10 border border-orange-100 dark:border-orange-900/30 p-4 rounded-xl">
+                            <h4 className="text-orange-700 dark:text-orange-400 font-bold text-sm mb-2">Sair do Quadro</h4>
+                            <p className="text-orange-600/80 dark:text-orange-400/70 text-xs leading-relaxed mb-4">Você perderá acesso a este quadro, mas ele continuará existindo para os outros membros.</p>
+                            <button onClick={handleLeaveBoard} disabled={isLoading} className="w-full bg-orange-600 hover:bg-orange-700 text-white font-bold py-2.5 rounded-xl text-sm shadow-lg shadow-orange-500/20 disabled:opacity-50 transition-all">{isLoading ? "Saindo..." : "Sair do Quadro"}</button>
+                        </div>
+                    )}
                 </div>
             )}
         </div>

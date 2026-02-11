@@ -2,7 +2,7 @@ import { FastifyPluginAsync } from 'fastify';
 import { z } from 'zod';
 import pool from '../database/connection';
 
-// --- DEFINIÇÃO DE TIPOS (Para corrigir as linhas vermelhas) ---
+// --- DEFINIÇÃO DE TIPOS ---
 interface BoardIdParam {
   id: string;
 }
@@ -24,7 +24,7 @@ interface CreateBoardBody {
 
 const boardsRoutes: FastifyPluginAsync = async (app) => {
   
-  // 1. LISTAR BOARDS
+  // 1. LISTAR BOARDS (CORRIGIDO COM AVATAR)
   app.get('/', { onRequest: [app.authenticate] }, async (request, reply) => {
     const userId = request.user.id;
     
@@ -34,7 +34,13 @@ const boardsRoutes: FastifyPluginAsync = async (app) => {
             bm_me.role as my_role,
             COALESCE(
                 (
-                    SELECT json_agg(json_build_object('name', u.name, 'id', u.id))
+                    SELECT json_agg(
+                        json_build_object(
+                            'id', u.id, 
+                            'name', u.name,
+                            'avatar', u.avatar  -- <--- CORREÇÃO AQUI: Adicionado avatar
+                        )
+                    )
                     FROM board_members bm_all
                     JOIN users u ON bm_all.user_id = u.id
                     WHERE bm_all.board_id = b.id
@@ -79,6 +85,7 @@ const boardsRoutes: FastifyPluginAsync = async (app) => {
         const boardRes = await client.query(insertBoardSql, [body.title, body.background_color, userId]);
         const newBoard = boardRes.rows[0];
 
+        // Adiciona o dono como membro
         await client.query(`INSERT INTO board_members (board_id, user_id, role) VALUES ($1, $2, 'owner')`, [newBoard.id, userId]);
 
         if (body.members && body.members.length > 0) {
@@ -107,7 +114,7 @@ const boardsRoutes: FastifyPluginAsync = async (app) => {
     }
   });
 
-  // 3. ADICIONAR MEMBRO (Corrigido com Tipagem)
+  // 3. ADICIONAR MEMBRO
   app.post<{ Params: BoardIdParam; Body: AddMemberBody }>(
     '/:id/members', 
     { onRequest: [app.authenticate] }, 
@@ -143,8 +150,7 @@ const boardsRoutes: FastifyPluginAsync = async (app) => {
       }
   });
 
-  // 4. REMOVER MEMBRO (Corrigido com Tipagem)
-  // 4. REMOVER MEMBRO (Com Notificação)
+  // 4. REMOVER MEMBRO
   app.delete<{ Params: MemberParams }>(
     '/:id/members/:userId', 
     { onRequest: [app.authenticate] }, 
@@ -152,23 +158,18 @@ const boardsRoutes: FastifyPluginAsync = async (app) => {
       const { id, userId } = req.params;
       const requesterId = req.user.id;
 
-      // Verifica permissões
       const ownerCheck = await pool.query('SELECT role FROM board_members WHERE board_id = $1 AND user_id = $2', [id, requesterId]);
       const isOwner = ownerCheck.rows[0]?.role === 'owner';
       
-      // Regra: Só dono remove outros. O próprio usuário pode se remover (sair).
       if (!isOwner && requesterId !== userId) {
           return reply.code(403).send({ error: 'Apenas o dono pode remover membros.' });
       }
 
-      // Verifica se o alvo é o dono (não pode ser removido)
       const targetCheck = await pool.query('SELECT role FROM board_members WHERE board_id = $1 AND user_id = $2', [id, userId]);
       if (targetCheck.rows[0]?.role === 'owner') {
           return reply.code(400).send({ error: 'O dono do quadro não pode ser removido.' });
       }
 
-      // --- NOVA LÓGICA DE NOTIFICAÇÃO ---
-      // Se estou sendo removido por outra pessoa, crie a notificação
       if (requesterId !== userId) {
           const boardRes = await pool.query('SELECT title FROM boards WHERE id = $1', [id]);
           const boardTitle = boardRes.rows[0]?.title || 'um quadro';
@@ -179,12 +180,11 @@ const boardsRoutes: FastifyPluginAsync = async (app) => {
           );
       }
 
-      // Remove o membro
       await pool.query('DELETE FROM board_members WHERE board_id = $1 AND user_id = $2', [id, userId]);
       return reply.send({ success: true });
   });
 
-  // 5. EXCLUIR QUADRO (Corrigido com Tipagem)
+  // 5. EXCLUIR QUADRO
   app.delete<{ Params: BoardIdParam }>(
     '/:id', 
     { onRequest: [app.authenticate] }, 
