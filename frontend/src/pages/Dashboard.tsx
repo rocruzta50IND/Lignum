@@ -85,13 +85,17 @@ export const Dashboard: React.FC = () => {
   return (
     <div className="flex-1 p-8 md:p-12 overflow-y-auto bg-[#F8FAFC] dark:bg-[#0F1117] transition-colors h-full font-sans">
       <main className="max-w-7xl mx-auto">
-        <div className="flex items-center gap-3 mb-10 opacity-90">
-            <div className="p-2.5 rounded-xl bg-white dark:bg-[#1F222A] text-rose-500 shadow-sm border border-gray-100 dark:border-gray-800/60">
-                <svg className="w-6 h-6" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}><path strokeLinecap="round" strokeLinejoin="round" d="M4 6a2 2 0 012-2h2a2 2 0 012 2v2a2 2 0 01-2 2H6a2 2 0 01-2-2V6zM14 6a2 2 0 012-2h2a2 2 0 012 2v2a2 2 0 01-2 2h-2a2 2 0 01-2-2V6zM4 16a2 2 0 012-2h2a2 2 0 012 2v2a2 2 0 01-2 2H6a2 2 0 01-2-2v-2zM14 16a2 2 0 012-2h2a2 2 0 01-2 2h-2a2 2 0 01-2-2v-2z" /></svg>
+        <div className="flex items-center gap-4 mb-10 opacity-90">
+            {/* Container do ícone com tamanho fixo e centralizado */}
+            <div className="w-12 h-12 min-w-[3rem] min-h-[3rem] flex-shrink-0 rounded-2xl bg-white dark:bg-[#1F222A] text-rose-500 shadow-sm border border-gray-100 dark:border-gray-800 flex items-center justify-center">
+                {/* Novo ícone de Pasta (Folder) com design limpo */}
+                <svg className="w-6 h-6" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                    <path strokeLinecap="round" strokeLinejoin="round" d="M3 7v10a2 2 0 002 2h14a2 2 0 002-2V9a2 2 0 00-2-2h-6l-2-2H5a2 2 0 00-2 2z" />
+                </svg>
             </div>
-            <div>
-                <h2 className="text-2xl font-extrabold text-gray-800 dark:text-white tracking-tight leading-none">Seus Projetos</h2>
-                <p className="text-sm text-gray-500 dark:text-gray-400 mt-1 font-medium">Gerencie seus quadros e tarefas.</p>
+            <div className="flex flex-col justify-center">
+                <h2 className="text-2xl font-extrabold text-gray-800 dark:text-white tracking-tight leading-tight">Seus Projetos</h2>
+                <p className="text-sm text-gray-500 dark:text-gray-400 font-medium">Gerencie seus quadros e tarefas.</p>
             </div>
         </div>
 
