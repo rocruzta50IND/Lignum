@@ -120,6 +120,8 @@ npm install
 Iniciar Backend
 cd backend
 npm run dev
+para redes externas usar:
+npm run dev -- --host 0.0.0.0
 
 
 Servidor disponível em:
@@ -132,6 +134,7 @@ Em outro terminal:
 
 cd frontend
 npm run dev
+
 
 
 Aplicação disponível em:

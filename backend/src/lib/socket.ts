@@ -1,38 +1,40 @@
 import { Server } from 'socket.io';
+import { Server as HttpServer } from 'http';
 
 let io: Server;
 
-export const initSocket = (httpServer: any) => {
+export const initSocket = (httpServer: HttpServer) => {
   io = new Server(httpServer, {
     cors: {
-      origin: "*", // Em produção, restrinja isso
+      // PERIGO/SOLUÇÃO: O '*' permite que qualquer IP (192.168...) conecte.
+      // Essencial para funcionar na rede local.
+      origin: "*", 
       methods: ["GET", "POST"]
     }
   });
 
   io.on('connection', (socket) => {
-    console.log('🔌 Cliente conectado:', socket.id);
+    console.log(`🔌 Cliente conectado: ${socket.id}`);
 
-    // Entrar na sala do board
-    socket.on('join_board', (boardId) => {
+    // Entrar na sala do Board
+    socket.on('join_board', (boardId: string) => {
       socket.join(boardId);
-      console.log(`👤 Socket ${socket.id} entrou no board ${boardId}`);
+      console.log(`➡️ Socket ${socket.id} entrou na sala ${boardId}`);
     });
 
     // Sair da sala
-    socket.on('leave_board', (boardId) => {
+    socket.on('leave_board', (boardId: string) => {
       socket.leave(boardId);
     });
 
     socket.on('disconnect', () => {
-      console.log('❌ Cliente desconectado');
+      console.log(`❌ Cliente desconectado: ${socket.id}`);
     });
   });
 
   return io;
 };
 
-// Função para pegar a instância do IO em outros arquivos
 export const getIO = () => {
   if (!io) {
     throw new Error("Socket.io não inicializado!");

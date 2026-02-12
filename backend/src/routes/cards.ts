@@ -3,90 +3,64 @@ import { z } from 'zod';
 import pool from '../database/connection'; 
 import { getIO } from '../lib/socket';
 
-const updateCardParamsSchema = z.object({
-  cardId: z.string().uuid(),
+// --- SCHEMAS ---
+const createCardBodySchema = z.object({ 
+    columnId: z.string().uuid(), 
+    title: z.string().min(1) 
+});
+
+const updateCardParamsSchema = z.object({ 
+    cardId: z.string().uuid(),
 });
 
 const updateCardBodySchema = z.object({
-  title: z.string().optional(),
-  description: z.string().optional(),
-  checklist: z.array(z.any()).optional(), 
-  comments: z.array(z.any()).optional(),
-  assignee: z.string().nullable().optional(),
-  dueDate: z.string().nullable().optional(),
-  hexColor: z.string().optional(),
-  priority: z.enum(['Baixa', 'Média', 'Alta']).optional(),
+    title: z.string().optional(),
+    description: z.string().optional(),
+    checklist: z.array(z.any()).optional(), 
+    comments: z.array(z.any()).optional(),
+    assignee: z.string().nullable().optional(), // Nullable para permitir remover
+    dueDate: z.string().nullable().optional(),  // Nullable para permitir remover
+    hexColor: z.string().optional(),
+    priority: z.enum(['Baixa', 'Média', 'Alta']).optional(),
+    columnId: z.string().uuid().optional()      // Caso mova via edição
 });
 
-// Schemas auxiliares
-const createCardBodySchema = z.object({ columnId: z.string().uuid(), title: z.string().min(1) });
 const moveCardParamsSchema = z.object({ cardId: z.string().uuid() });
-const moveCardBodySchema = z.object({ newColumnId: z.string().uuid(), newRankPosition: z.number() });
+const moveCardBodySchema = z.object({ 
+    newColumnId: z.string().uuid(), 
+    newRankPosition: z.number() 
+});
+
 const deleteCardParamsSchema = z.object({ cardId: z.string().uuid() });
 
 const cardsRoutes: FastifyPluginAsync = async (app) => {
 
-  // --- EDITAR CARD (PUT) ---
-  app.put('/:cardId', { onRequest: [app.authenticate] }, async (request, reply) => {
-    const params = updateCardParamsSchema.parse(request.params);
-    const body = updateCardBodySchema.parse(request.body);
-
-    console.log(">>> RECEBENDO UPDATE:", { id: params.cardId, body });
-
+  // 1. CRIAR CARTÃO
+  app.post('/', { onRequest: [app.authenticate] }, async (req, reply) => {
     try {
-        // 1. Validar e pegar boardId
-        const findRes = await pool.query(
-            `SELECT c.board_id FROM cards k JOIN columns c ON k.column_id = c.id WHERE k.id = $1`, 
-            [params.cardId]
+        const body = createCardBodySchema.parse(req.body);
+        const userId = req.user.id;
+        
+        // 1. Descobrir Board ID (para Socket)
+        const colRes = await pool.query('SELECT board_id FROM columns WHERE id = $1', [body.columnId]);
+        if (colRes.rowCount === 0) return reply.code(404).send({ error: 'Coluna não encontrada' });
+        const boardId = colRes.rows[0].board_id;
+
+        // 2. Calcular Posição (Rank)
+        const rankRes = await pool.query('SELECT MAX(rank_position) as m FROM cards WHERE column_id=$1', [body.columnId]);
+        const newRank = (rankRes.rows[0].m || 0) + 10000; // +10000 garante espaço
+
+        // 3. Inserir (Usando nomes do Banco)
+        const res = await pool.query(
+            `INSERT INTO cards (column_id, title, description, rank_position, created_by, hex_color, priority, checklist, comments) 
+             VALUES ($1, $2, '', $3, $4, '#2C2C2C', 'Média', '[]'::jsonb, '[]'::jsonb) 
+             RETURNING *`,
+            [body.columnId, body.title, newRank, userId]
         );
         
-        if (findRes.rowCount === 0) return reply.code(404).send({ error: 'Card não encontrado.' });
-        const boardId = findRes.rows[0].board_id;
-
-        // 2. Preparar dados
-        const checklistJson = body.checklist ? JSON.stringify(body.checklist) : null;
-        const commentsJson = body.comments ? JSON.stringify(body.comments) : null;
-
-        // Lógica de Data: Se for null (remove a data), enviamos a flag. Se for undefined (não muda), enviamos null.
-        let sqlDueDate = body.dueDate; 
-        if (body.dueDate === null) sqlDueDate = 'NULL_RESET'; 
-
-        // 3. Update Direto
-        // CORREÇÃO AQUI: Mudamos "IS 'NULL_RESET'" para "= 'NULL_RESET'"
-        const updateSql = `
-            UPDATE cards 
-            SET 
-                title = COALESCE($1, title),
-                description = COALESCE($2, description),
-                checklist = CASE WHEN $3::text IS NULL THEN checklist ELSE $3::jsonb END,
-                comments = CASE WHEN $4::text IS NULL THEN comments ELSE $4::jsonb END,
-                assignee = COALESCE($5, assignee),
-                due_date = CASE WHEN $6::text = 'NULL_RESET' THEN NULL ELSE COALESCE($6::timestamp, due_date) END,
-                hex_color = COALESCE($7, hex_color),
-                priority = COALESCE($8, priority),
-                updated_at = NOW()
-            WHERE id = $9
-            RETURNING *;
-        `;
-       const values = [
-            body.title ?? null,        // Se undefined, vira null para o COALESCE funcionar
-            body.description ?? null, 
-            checklistJson ?? null,
-            commentsJson ?? null,
-            body.assignee ?? null,
-            sqlDueDate ?? null,        // Já tratamos o NULL_RESET antes, mas por segurança
-            body.hexColor ?? null,
-            body.priority ?? null,
-            params.cardId
-        ];
-        console.log(">>> VALORES ENVIADOS AO BANCO:", values);
-
-
-        const cardRes = await pool.query(updateSql, values);
-        const raw = cardRes.rows[0];
-
-        // 4. Formatar retorno
-        const updatedCard = {
+        // 4. Mapear retorno para CamelCase (Frontend)
+        const raw = res.rows[0];
+        const newCard = { 
             id: raw.id,
             columnId: raw.column_id,
             title: raw.title,
@@ -100,75 +74,164 @@ const cardsRoutes: FastifyPluginAsync = async (app) => {
             order: raw.rank_position
         };
 
-        getIO().to(boardId).emit('card_updated', updatedCard);
-        console.log(">>> SUCESSO UPDATE:", updatedCard.id);
+        // Emitir evento
+        getIO().to(boardId).emit('card_created', newCard);
         
+        return reply.code(201).send(newCard);
+
+    } catch (e: any) { 
+        console.error("❌ ERRO CREATE CARD:", e); 
+        return reply.code(500).send({ error: 'Erro ao criar card' }); 
+    }
+  });
+
+  // 2. EDITAR CARTÃO (PUT)
+  app.put('/:cardId', { onRequest: [app.authenticate] }, async (request, reply) => {
+    const params = updateCardParamsSchema.parse(request.params);
+    const body = updateCardBodySchema.parse(request.body);
+
+    console.log(">>> UPDATE CARD:", { id: params.cardId, body });
+
+    try {
+        // 1. Busca Board ID para notificar
+        const findRes = await pool.query(
+            `SELECT c.board_id FROM cards k JOIN columns c ON k.column_id = c.id WHERE k.id = $1`, 
+            [params.cardId]
+        );
+        if (findRes.rowCount === 0) return reply.code(404).send({ error: 'Card não encontrado.' });
+        const boardId = findRes.rows[0].board_id;
+
+        // 2. Construção Dinâmica da Query (Segura e resolve bug do NULL)
+        const fields: string[] = [];
+        const values: any[] = [];
+        let idx = 1;
+
+        if (body.title !== undefined) { fields.push(`title = $${idx++}`); values.push(body.title); }
+        if (body.description !== undefined) { fields.push(`description = $${idx++}`); values.push(body.description); }
+        if (body.priority !== undefined) { fields.push(`priority = $${idx++}`); values.push(body.priority); }
+        
+        // Mapeamento hexColor -> hex_color
+        if (body.hexColor !== undefined) { fields.push(`hex_color = $${idx++}`); values.push(body.hexColor); }
+        
+        // Datas e Assignee (Permite NULL explicitamente)
+        if (body.dueDate !== undefined) { fields.push(`due_date = $${idx++}`); values.push(body.dueDate); }
+        if (body.assignee !== undefined) { fields.push(`assignee = $${idx++}`); values.push(body.assignee); }
+        if (body.columnId !== undefined) { fields.push(`column_id = $${idx++}`); values.push(body.columnId); }
+
+        // JSONs
+        if (body.checklist !== undefined) { 
+            fields.push(`checklist = $${idx++}::jsonb`); 
+            values.push(JSON.stringify(body.checklist)); 
+        }
+        if (body.comments !== undefined) { 
+            fields.push(`comments = $${idx++}::jsonb`); 
+            values.push(JSON.stringify(body.comments)); 
+        }
+
+        // Se nada foi enviado, retorna o objeto atual sem erro
+        if (fields.length === 0) {
+            const current = await pool.query('SELECT * FROM cards WHERE id = $1', [params.cardId]);
+            return reply.send(current.rows[0]);
+        }
+
+        fields.push(`updated_at = NOW()`);
+        
+        // Adiciona ID no final
+        values.push(params.cardId);
+        const query = `UPDATE cards SET ${fields.join(', ')} WHERE id = $${idx} RETURNING *`;
+
+        // 3. Executa Update
+        const res = await pool.query(query, values);
+        const raw = res.rows[0];
+
+        // 4. Formata retorno
+        const updatedCard = {
+            id: raw.id,
+            columnId: raw.column_id,
+            title: raw.title,
+            description: raw.description,
+            checklist: raw.checklist || [],
+            comments: raw.comments || [],
+            priority: raw.priority,
+            hexColor: raw.hex_color, // Banco: hex_color -> Front: hexColor
+            dueDate: raw.due_date,
+            assignee: raw.assignee,
+            order: raw.rank_position
+        };
+
+        getIO().to(boardId).emit('card_updated', updatedCard);
         return reply.code(200).send(updatedCard);
 
     } catch (error: any) {
         console.error("❌ ERRO NO UPDATE CARD:", error);
-        return reply.code(500).send({ 
-            error: 'Erro interno ao salvar.', 
-            details: error.message 
-        });
+        return reply.code(500).send({ error: 'Erro interno ao salvar.' });
     }
   });
 
-  // --- CREATE ---
-  app.post('/', { onRequest: [app.authenticate] }, async (req, reply) => {
-    try {
-        const body = createCardBodySchema.parse(req.body);
-        const userId = req.user.id;
-        
-        const colRes = await pool.query('SELECT board_id FROM columns WHERE id = $1', [body.columnId]);
-        if (colRes.rowCount === 0) return reply.code(400).send({ error: 'Coluna 404' });
-        const boardId = colRes.rows[0].board_id;
-
-        const rankRes = await pool.query('SELECT MAX(rank_position) as m FROM cards WHERE column_id=$1', [body.columnId]);
-        const newRank = (rankRes.rows[0].m || 0) + 1000;
-
-        const res = await pool.query(
-            `INSERT INTO cards (column_id, title, description, rank_position, created_by) VALUES ($1, $2, '', $3, $4) RETURNING *`,
-            [body.columnId, body.title, newRank, userId]
-        );
-        
-        const newCard = { ...res.rows[0], checklist: [], comments: [], priority: 'Média', hexColor: '#2C2C2C' };
-        getIO().to(boardId).emit('card_created', newCard);
-        return reply.code(201).send(newCard);
-    } catch (e) { console.error(e); return reply.code(500).send(e); }
-  });
-
-  // --- MOVE ---
+  // 3. MOVER CARTÃO (Drag & Drop)
   app.patch('/:cardId/move', { onRequest: [app.authenticate] }, async (req, reply) => {
     try {
         const p = moveCardParamsSchema.parse(req.params);
         const b = moveCardBodySchema.parse(req.body);
         
         const colRes = await pool.query('SELECT board_id FROM columns WHERE id=$1', [b.newColumnId]);
+        if (colRes.rowCount === 0) return reply.code(404).send(); // Coluna destino não existe
+        
         const boardId = colRes.rows[0].board_id;
 
         const res = await pool.query(
-            `UPDATE cards SET column_id=$1, rank_position=$2 WHERE id=$3 RETURNING *`,
+            `UPDATE cards SET column_id=$1, rank_position=$2, updated_at=NOW() WHERE id=$3 RETURNING *`,
             [b.newColumnId, b.newRankPosition, p.cardId]
         );
         
-        const moved = { ...res.rows[0], columnId: res.rows[0].column_id, hexColor: '#2C2C2C' };
-        getIO().to(boardId).emit('card_moved', { cardId: p.cardId, newColumnId: b.newColumnId, newRankPosition: b.newRankPosition });
+        const raw = res.rows[0];
+        const moved = { 
+            id: raw.id,
+            columnId: raw.column_id,
+            title: raw.title,
+            description: raw.description,
+            checklist: raw.checklist,
+            comments: raw.comments,
+            priority: raw.priority,
+            hexColor: raw.hex_color,
+            dueDate: raw.due_date,
+            assignee: raw.assignee,
+            order: raw.rank_position
+        };
+
+        // Emite evento específico de movimento
+        getIO().to(boardId).emit('card_moved', { 
+            cardId: p.cardId, 
+            newColumnId: b.newColumnId, 
+            newRankPosition: b.newRankPosition 
+        });
+        
         return reply.code(200).send(moved);
-    } catch (e) { console.error(e); return reply.code(500).send(e); }
+    } catch (e) { 
+        console.error(e); 
+        return reply.code(500).send(e); 
+    }
   });
 
-  // --- DELETE ---
+  // 4. DELETAR CARTÃO
   app.delete('/:cardId', { onRequest: [app.authenticate] }, async (req, reply) => {
     try {
         const p = deleteCardParamsSchema.parse(req.params);
-        const find = await pool.query(`SELECT c.board_id FROM cards k JOIN columns c ON k.column_id=c.id WHERE k.id=$1`, [p.cardId]);
-        if(find.rowCount===0) return reply.code(404).send();
         
-        await pool.query('DELETE FROM cards WHERE id=$1', [p.cardId]);
-        getIO().to(find.rows[0].board_id).emit('card_deleted', { cardId: p.cardId });
+        // Pega boardId antes de deletar para poder notificar
+        const find = await pool.query(`SELECT c.board_id FROM cards k JOIN columns c ON k.column_id=c.id WHERE k.id=$1`, [p.cardId]);
+        
+        if(find.rowCount > 0) {
+            const boardId = find.rows[0].board_id;
+            await pool.query('DELETE FROM cards WHERE id=$1', [p.cardId]);
+            getIO().to(boardId).emit('card_deleted', { cardId: p.cardId });
+        }
+        
         return reply.code(204).send();
-    } catch (e) { console.error(e); return reply.code(500).send(e); }
+    } catch (e) { 
+        console.error(e); 
+        return reply.code(500).send(e); 
+    }
   });
 };
 

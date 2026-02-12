@@ -5,33 +5,41 @@ import { getIO } from '../lib/socket';
 
 const chatRoutes: FastifyPluginAsync = async (app) => {
   
-  // LISTAR MENSAGENS (Histórico)
+  // 1. LISTAR MENSAGENS (Histórico)
   app.get('/:boardId', { onRequest: [app.authenticate] }, async (req, reply) => {
-    const { boardId } = req.params as any;
+    // Validação do param
+    const paramsSchema = z.object({ boardId: z.string().uuid() });
+    const { boardId } = paramsSchema.parse(req.params);
     
-    // Busca mensagens com dados do usuário (nome e avatar)
-    const result = await pool.query(
-      `SELECT m.id, m.content, m.created_at, m.user_id, u.name as user_name, u.avatar as user_avatar
-       FROM messages m
-       JOIN users u ON m.user_id = u.id
-       WHERE m.board_id = $1
-       ORDER BY m.created_at ASC`,
-      [boardId]
-    );
-    
-    return result.rows;
+    try {
+        const result = await pool.query(
+        `SELECT m.id, m.content, m.created_at, m.user_id, u.name as user_name, u.avatar as user_avatar
+            FROM messages m
+            JOIN users u ON m.user_id = u.id
+            WHERE m.board_id = $1
+            ORDER BY m.created_at ASC`,
+        [boardId]
+        );
+        
+        return result.rows;
+    } catch (error) {
+        console.error("Erro ao listar mensagens:", error);
+        return reply.code(500).send({ error: 'Erro ao carregar chat' });
+    }
   });
 
-  // ENVIAR MENSAGEM
-  app.post('/:boardId', { onRequest: [app.authenticate] }, async (req: any, reply) => {
-    const { boardId } = req.params;
-    const userId = req.user.id;
-    
+  // 2. ENVIAR MENSAGEM
+  app.post('/:boardId', { onRequest: [app.authenticate] }, async (req, reply) => {
+    const paramsSchema = z.object({ boardId: z.string().uuid() });
     const bodySchema = z.object({
         content: z.string().min(1),
         mentionedUserIds: z.array(z.string()).optional() 
     });
+
+    // Validações
+    const { boardId } = paramsSchema.parse(req.params);
     const body = bodySchema.parse(req.body);
+    const userId = req.user.id;
 
     const client = await pool.connect();
     try {
@@ -39,12 +47,12 @@ const chatRoutes: FastifyPluginAsync = async (app) => {
 
         // 1. Salvar Mensagem
         const res = await client.query(
-            `INSERT INTO messages (board_id, user_id, content) VALUES ($1, $2, $3) RETURNING *`,
+            `INSERT INTO messages (board_id, user_id, content) VALUES ($1, $2, $3) RETURNING id, content, created_at, user_id`,
             [boardId, userId, body.content]
         );
         const savedMsg = res.rows[0];
 
-        // 2. CORREÇÃO: Buscar Nome E AVATAR do autor para enviar no socket
+        // 2. Buscar Nome E AVATAR do autor (Essencial para o visual)
         const userRes = await client.query('SELECT name, avatar FROM users WHERE id = $1', [userId]);
         const user = userRes.rows[0];
 
@@ -57,7 +65,7 @@ const chatRoutes: FastifyPluginAsync = async (app) => {
                          VALUES ($1, 'mention', $2, $3)`,
                         [
                             mentionedId, 
-                            `${user.name} te mencionou no chat: "${body.content.substring(0, 30)}..."`,
+                            `${user.name} te mencionou: "${body.content.substring(0, 20)}..."`,
                             `/board/${boardId}`
                         ]
                     );
@@ -67,11 +75,15 @@ const chatRoutes: FastifyPluginAsync = async (app) => {
 
         await client.query('COMMIT');
 
-        // 4. Emitir evento via Socket com TODOS os dados visuais
+        // 4. Emitir evento via Socket
+        // O payload deve ser IDÊNTICO ao que vem no GET para o frontend não se perder
         const msgPayload = {
-            ...savedMsg,
+            id: savedMsg.id,
+            content: savedMsg.content,
+            created_at: savedMsg.created_at,
+            user_id: savedMsg.user_id,
             user_name: user.name,
-            user_avatar: user.avatar // <--- IMPORTANTE: Enviando a foto em tempo real
+            user_avatar: user.avatar 
         };
         
         getIO().to(boardId).emit('receive_message', msgPayload);
@@ -80,7 +92,7 @@ const chatRoutes: FastifyPluginAsync = async (app) => {
 
     } catch (err) {
         await client.query('ROLLBACK');
-        console.error(err);
+        console.error("Erro envio mensagem:", err);
         return reply.code(500).send(err);
     } finally {
         client.release();
