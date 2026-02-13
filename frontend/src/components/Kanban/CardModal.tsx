@@ -13,9 +13,18 @@ interface CardModalProps {
   onDelete: () => void;
 }
 
-// Estendendo a interface de Comentário para incluir avatar (caso não tenha no types.ts)
+// Estendendo a interface de Comentário para incluir avatar
 interface ExtendedComment extends Comment {
     userAvatar?: string;
+}
+
+// Função para gerar ID compatível com UUID v4 (funciona em qualquer navegador/rede)
+function generateUUID() {
+  return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, function(c) {
+    const r = Math.random() * 16 | 0;
+    const v = c === 'x' ? r : (r & 0x3 | 0x8);
+    return v.toString(16);
+  });
 }
 
 export const CardModal: React.FC<CardModalProps> = ({ isOpen, card, boardId, onClose, onUpdateLocal, onDelete }) => {
@@ -50,15 +59,25 @@ export const CardModal: React.FC<CardModalProps> = ({ isOpen, card, boardId, onC
       setIsDeleting(false); 
   }, [card]);
 
-  const addChecklistItem = () => { 
-      if (!newChecklistItem.trim()) return; 
-      const newItem: ChecklistItem = { id: crypto.randomUUID(), text: newChecklistItem, isChecked: false }; 
-      setChecklist([...checklist, newItem]); 
-      setNewChecklistItem(''); 
+  // --- CORREÇÃO 1: Usando as variáveis certas (newChecklistItem) ---
+  const addChecklistItem = () => {
+    if (!newChecklistItem.trim()) return; // Corrigido de newItemText para newChecklistItem
+
+    const newItem: ChecklistItem = {
+        id: generateUUID(), 
+        text: newChecklistItem, // Corrigido de newItemText para newChecklistItem
+        isChecked: false // Corrigido de isCompleted para isChecked (padrão do seu código)
+    };
+
+    const newChecklist = [...checklist, newItem];
+    setChecklist(newChecklist);
+    setNewChecklistItem(''); // Corrigido de setNewItemText para setNewChecklistItem
   };
+
   const toggleCheckitem = (itemId: string) => { 
       setChecklist(prev => prev.map(item => item.id === itemId ? { ...item, isChecked: !item.isChecked } : item)); 
   };
+
   const deleteCheckitem = (itemId: string) => { 
       setChecklist(prev => prev.filter(item => item.id !== itemId)); 
   };
@@ -67,10 +86,10 @@ export const CardModal: React.FC<CardModalProps> = ({ isOpen, card, boardId, onC
       if (!newComment.trim() || !user) return; 
       
       const comment: ExtendedComment = { 
-          id: crypto.randomUUID(), 
+          id: generateUUID(), // --- CORREÇÃO 2: Removido crypto.randomUUID() ---
           userId: user.id, 
           userName: user.name, 
-          userAvatar: user.avatar, // <--- 1. SALVANDO A FOTO NO COMENTÁRIO
+          userAvatar: user.avatar, 
           content: newComment, 
           createdAt: new Date().toISOString() 
       }; 
@@ -87,13 +106,13 @@ export const CardModal: React.FC<CardModalProps> = ({ isOpen, card, boardId, onC
               priority, 
               dueDate: dueDate || null, 
               checklist, 
-              comments, // Envia os comentários novos com avatar
+              comments, 
               columnId: card.columnId 
           }; 
           const res = await api.put(`/cards/${card.id}`, payload); 
           
           onUpdateLocal(res.data);
-          onClose(); // <--- 2. FECHAMENTO AUTOMÁTICO
+          onClose(); 
           
       } catch (e) { 
           console.error(e); 
@@ -186,7 +205,6 @@ export const CardModal: React.FC<CardModalProps> = ({ isOpen, card, boardId, onC
                         {comments.map(comment => (
                             <div key={comment.id} className="flex gap-4 group">
                                 <div className="flex-shrink-0">
-                                    {/* 3. LENDO A FOTO DO COMENTÁRIO */}
                                     <UserAvatar 
                                         name={comment.userName} 
                                         src={comment.userAvatar} 

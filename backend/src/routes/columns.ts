@@ -1,6 +1,7 @@
 import { FastifyPluginAsync } from 'fastify';
 import { z } from 'zod';
 import pool from '../database/connection'; 
+import { getIO } from '../lib/socket'; // <--- IMPORTANTE
 
 const getColumnsQuerySchema = z.object({ boardId: z.string().uuid().optional() });
 const createColumnBodySchema = z.object({ title: z.string().min(1), boardId: z.string().uuid() });
@@ -12,7 +13,7 @@ const deleteColumnParamsSchema = z.object({ columnId: z.string().uuid() });
 
 const columnsRoutes: FastifyPluginAsync = async (app) => {
   
-  // 1. LISTAR COLUNAS E CARDS
+  // 1. LISTAR COLUNAS (Mantém igual)
   app.get('/', { onRequest: [app.authenticate] }, async (request, reply) => {
     try {
         const q = getColumnsQuerySchema.safeParse(request.query);
@@ -21,25 +22,17 @@ const columnsRoutes: FastifyPluginAsync = async (app) => {
         let { boardId } = q.data;
         const userId = request.user.id;
 
-        // Auto-Discovery: Se não enviou boardId, pega o último acessado
         if (!boardId) {
             const b = await pool.query('SELECT b.id FROM boards b JOIN board_members bm ON b.id = bm.board_id WHERE bm.user_id = $1 LIMIT 1', [userId]);
-            if ((b.rowCount || 0) > 0) {
-                boardId = b.rows[0].id;
-            } else {
-                return reply.send([]); // Retorna vazio se não tiver quadros
-            }
+            if ((b.rowCount || 0) > 0) boardId = b.rows[0].id;
+            else return reply.send([]);
         }
 
-        // --- QUERY 1: COLUNAS ---
-        // Tenta buscar usando order_index. Se seu banco usar outro nome, vai dar erro aqui e vamos ver no log.
         const columnsRes = await pool.query(
             'SELECT id, title, board_id, order_index as "order" FROM columns WHERE board_id = $1 ORDER BY order_index ASC',
             [boardId]
         );
 
-        // --- QUERY 2: CARDS ---
-        // Removi o JOIN complexo de users temporariamente para isolar o problema
         const cardsRes = await pool.query(`
             SELECT 
                 k.id, k.title, k.description, k.column_id, k.rank_position,
@@ -51,7 +44,6 @@ const columnsRoutes: FastifyPluginAsync = async (app) => {
             ORDER BY k.rank_position ASC
         `, [boardId]);
 
-        // Monta a resposta
         const columns = columnsRes.rows.map(col => {
             const colCards = cardsRes.rows.filter(c => c.column_id === col.id);
             const formattedCards = colCards.map(c => ({
@@ -63,7 +55,7 @@ const columnsRoutes: FastifyPluginAsync = async (app) => {
                 priority: c.priority || 'Média',
                 hexColor: c.hex_color || '#2C2C2C',
                 dueDate: c.due_date,
-                assignee: c.assignee, // Envia apenas o ID/Nome por enquanto
+                assignee: c.assignee,
                 checklist: c.checklist || [],
                 comments: c.comments || []
             }));
@@ -73,14 +65,12 @@ const columnsRoutes: FastifyPluginAsync = async (app) => {
         return reply.send(columns);
 
     } catch (e: any) { 
-        // AQUI ESTÁ A CHAVE: Este log vai aparecer no terminal preto do backend
-        console.error("❌ ERRO CRÍTICO NO GET /COLUMNS:");
         console.error(e);
-        return reply.code(500).send({ error: 'Erro interno', details: e.message }); 
+        return reply.code(500).send({ error: 'Erro interno' }); 
     }
   });
 
-  // 2. CRIAR COLUNA
+  // 2. CRIAR COLUNA (+ SOCKET)
   app.post('/', { onRequest: [app.authenticate] }, async (req, reply) => {
       try {
         const b = createColumnBodySchema.parse(req.body);
@@ -89,24 +79,35 @@ const columnsRoutes: FastifyPluginAsync = async (app) => {
         
         const res = await pool.query(
             'INSERT INTO columns (title, board_id, order_index) VALUES ($1, $2, $3) RETURNING *', 
-            [b.title, b.boardId, count + 1]
+            [b.title, b.boardId, count] // count é o novo index (fim da lista)
         );
-        return reply.status(201).send({ ...res.rows[0], cards: [] });
+        
+        const newCol = { ...res.rows[0], cards: [], order: res.rows[0].order_index };
+        
+        // AVISAR A GALERA
+        getIO().to(b.boardId).emit('column_created', newCol);
+
+        return reply.status(201).send(newCol);
       } catch (error) {
         console.error("Erro ao criar coluna:", error);
         return reply.code(500).send(error);
       }
   });
   
-  // 3. ATUALIZAR COLUNA
+  // 3. ATUALIZAR TÍTULO (+ SOCKET)
   app.patch('/:columnId', { onRequest: [app.authenticate] }, async (req, reply) => {
       const p = updateColumnParamsSchema.parse(req.params); 
       const b = updateColumnBodySchema.parse(req.body);
+      
       const res = await pool.query('UPDATE columns SET title=$1 WHERE id=$2 RETURNING *', [b.title, p.columnId]);
-      return reply.send(res.rows[0]);
+      const updated = res.rows[0];
+
+      getIO().to(updated.board_id).emit('column_updated', { id: updated.id, title: updated.title });
+
+      return reply.send(updated);
   });
 
-  // 4. MOVER COLUNA
+  // 4. MOVER COLUNA (+ SOCKET)
   app.patch('/:columnId/move', { onRequest: [app.authenticate] }, async (req, reply) => {
       const p = moveColumnParamsSchema.parse(req.params);
       const b = moveColumnBodySchema.parse(req.body);
@@ -130,6 +131,10 @@ const columnsRoutes: FastifyPluginAsync = async (app) => {
           }
           await client.query('UPDATE columns SET order_index=$1 WHERE id=$2', [newPos, p.columnId]);
           await client.query('COMMIT');
+          
+          // AVISAR MOVIMENTO
+          getIO().to(boardId).emit('column_moved', { columnId: p.columnId, newPosition: newPos });
+
       } catch(e) { 
           await client.query('ROLLBACK'); 
           throw e; 
@@ -139,10 +144,19 @@ const columnsRoutes: FastifyPluginAsync = async (app) => {
       return reply.send({success:true});
   });
 
-  // 5. DELETAR COLUNA
+  // 5. DELETAR COLUNA (+ SOCKET)
   app.delete('/:columnId', { onRequest: [app.authenticate] }, async (req, reply) => {
       const p = deleteColumnParamsSchema.parse(req.params);
+      
+      // Busca boardId antes de deletar pra poder avisar na sala certa
+      const find = await pool.query('SELECT board_id FROM columns WHERE id=$1', [p.columnId]);
+      if (find.rowCount === 0) return reply.send();
+      const boardId = find.rows[0].board_id;
+
       await pool.query('DELETE FROM columns WHERE id=$1', [p.columnId]);
+
+      getIO().to(boardId).emit('column_deleted', { columnId: p.columnId });
+
       return reply.status(204).send();
   });
 };

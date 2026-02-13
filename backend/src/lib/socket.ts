@@ -6,29 +6,33 @@ let io: Server;
 export const initSocket = (httpServer: HttpServer) => {
   io = new Server(httpServer, {
     cors: {
-      // PERIGO/SOLUÇÃO: O '*' permite que qualquer IP (192.168...) conecte.
-      // Essencial para funcionar na rede local.
       origin: "*", 
-      methods: ["GET", "POST"]
+      methods: ["GET", "POST", "PUT", "PATCH", "DELETE"]
     }
   });
 
   io.on('connection', (socket) => {
-    console.log(`🔌 Cliente conectado: ${socket.id}`);
+    console.log(`🔌 Socket conectado: ${socket.id}`);
 
-    // Entrar na sala do Board
-    socket.on('join_board', (boardId: string) => {
+    // 1. Sala do Quadro (Para Cards e Chat)
+    socket.on('join_board', (boardId) => {
       socket.join(boardId);
-      console.log(`➡️ Socket ${socket.id} entrou na sala ${boardId}`);
+      console.log(`➡️ ${socket.id} entrou no quadro ${boardId}`);
+    });
+
+    // 2. Sala do Usuário (PARA NOTIFICAÇÕES PRIVADAS)
+    socket.on('join_user', (userId) => {
+      socket.join(userId);
+      console.log(`👤 ${socket.id} entrou na sala pessoal ${userId}`);
     });
 
     // Sair da sala
-    socket.on('leave_board', (boardId: string) => {
+    socket.on('leave_board', (boardId) => {
       socket.leave(boardId);
     });
 
     socket.on('disconnect', () => {
-      console.log(`❌ Cliente desconectado: ${socket.id}`);
+      console.log(`❌ Socket desconectado: ${socket.id}`);
     });
   });
 
@@ -36,8 +40,6 @@ export const initSocket = (httpServer: HttpServer) => {
 };
 
 export const getIO = () => {
-  if (!io) {
-    throw new Error("Socket.io não inicializado!");
-  }
+  if (!io) throw new Error("Socket não iniciado!");
   return io;
 };

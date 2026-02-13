@@ -1,33 +1,32 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { useAuth } from '../../contexts/AuthContext';
 import { api } from '../../services/api';
-import { io, Socket } from 'socket.io-client';
+import { socket } from '../../services/socket'; // <--- USANDO O SOCKET GLOBAL (CORRETO)
 import { UserAvatar } from '../UserAvatar';
-import { useNavigate } from 'react-router-dom'; // <--- 1. Importação necessária
+import { useNavigate } from 'react-router-dom';
 
 interface ChatSidebarProps { boardId: string; }
 
 interface Message {
-    id: string;
-    content: string;
-    user_id: string;
-    user_name: string;
-    user_avatar?: string;
-    created_at: string;
+  id: string;
+  content: string;
+  user_id: string;
+  user_name: string;
+  user_avatar?: string;
+  created_at: string;
 }
 
 interface Member {
-    id: string;
-    name: string;
+  id: string;
+  name: string;
 }
 
 export const ChatSidebar: React.FC<ChatSidebarProps> = ({ boardId }) => {
   const { user } = useAuth();
-  const navigate = useNavigate(); // <--- 2. Hook de navegação
+  const navigate = useNavigate();
   
   const [messages, setMessages] = useState<Message[]>([]);
   const [newMessage, setNewMessage] = useState("");
-  const [socket, setSocket] = useState<Socket | null>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
 
   const [showMentionList, setShowMentionList] = useState(false);
@@ -36,7 +35,7 @@ export const ChatSidebar: React.FC<ChatSidebarProps> = ({ boardId }) => {
   const [mentionedIds, setMentionedIds] = useState<string[]>([]);
 
   useEffect(() => {
-      // Carregar membros
+      // 1. Carregar membros
       api.get(`/boards`).then(res => {
           const currentBoard = res.data.find((b: any) => b.id === boardId);
           if (currentBoard && currentBoard.members) {
@@ -44,26 +43,35 @@ export const ChatSidebar: React.FC<ChatSidebarProps> = ({ boardId }) => {
           }
       });
 
-      // Carregar histórico
-      api.get(`/chat/${boardId}`).then(res => setMessages(res.data));
+      // 2. Carregar histórico
+      api.get(`/chat/${boardId}`).then(res => {
+          setMessages(res.data);
+          // Scroll para o fim ao carregar histórico
+          setTimeout(() => scrollRef.current?.scrollIntoView(), 100);
+      });
 
-      // Conexão Socket
-      const newSocket = io('http://localhost:3000'); 
-      newSocket.emit('join_board', boardId);
+      // 3. Conexão Socket (USANDO A INSTÂNCIA GLOBAL)
+      // Não precisamos de io('localhost') aqui, usamos o importado
+      socket.emit('join_board', boardId);
       
-      newSocket.on('receive_message', (msg: Message) => {
+      const handleReceiveMessage = (msg: Message) => {
           setMessages(prev => {
+             // Evita duplicatas se o socket enviar algo que já temos
              if (prev.some(m => m.id === msg.id)) return prev;
              return [...prev, msg];
           });
+          // Scroll suave ao receber msg nova
           setTimeout(() => scrollRef.current?.scrollIntoView({ behavior: 'smooth' }), 100);
-      });
+      };
 
-      setSocket(newSocket);
-      return () => { newSocket.disconnect(); };
+      socket.on('receive_message', handleReceiveMessage);
+
+      // Cleanup
+      return () => { 
+          socket.off('receive_message', handleReceiveMessage);
+          // Não desconectamos o socket global aqui, apenas removemos o listener
+      };
   }, [boardId]);
-
-  useEffect(() => { scrollRef.current?.scrollIntoView(); }, [messages]);
 
   const handleInputChange = (e: React.ChangeEvent<HTMLInputElement>) => {
       const val = e.target.value;
@@ -90,15 +98,24 @@ export const ChatSidebar: React.FC<ChatSidebarProps> = ({ boardId }) => {
 
   const handleSend = async () => {
       if (!newMessage.trim()) return;
+      
+      // Otimismo: Limpa o input antes do servidor responder
+      const tempContent = newMessage;
+      setNewMessage("");
+      setShowMentionList(false);
+      
       try {
           await api.post(`/chat/${boardId}`, {
-              content: newMessage,
+              content: tempContent,
               mentionedUserIds: mentionedIds 
           });
-          setNewMessage("");
           setMentionedIds([]); 
+          // Não precisamos adicionar a mensagem manualmente aqui, 
+          // pois o backend vai emitir 'receive_message' via socket e o useEffect vai pegar.
       } catch (e) {
           console.error("Erro ao enviar msg", e);
+          // Se der erro, poderíamos restaurar o texto no input (opcional)
+          setNewMessage(tempContent);
       }
   };
 
@@ -139,10 +156,9 @@ export const ChatSidebar: React.FC<ChatSidebarProps> = ({ boardId }) => {
   return (
     <div className="flex flex-col h-full w-full bg-white dark:bg-[#16181D] border-r border-gray-100 dark:border-gray-800/50">
       
-      {/* --- HEADER COM BOTÃO DE VOLTAR --- */}
+      {/* HEADER */}
       <div className="p-4 border-b border-gray-100 dark:border-gray-800/50 bg-gray-50/50 dark:bg-[#1F222A]/50 flex items-center justify-between shadow-sm z-10">
           <div className="flex items-center gap-3">
-              {/* BOTÃO VOLTAR */}
               <button 
                 onClick={() => navigate('/')} 
                 className="p-2 -ml-2 text-gray-400 hover:text-gray-800 dark:hover:text-white hover:bg-gray-200 dark:hover:bg-[#2C2C2C] rounded-xl transition-all active:scale-95 group"
@@ -162,7 +178,7 @@ export const ChatSidebar: React.FC<ChatSidebarProps> = ({ boardId }) => {
           <div className="w-2 h-2 rounded-full bg-green-500 animate-pulse shadow-[0_0_8px_rgba(34,197,94,0.5)]" title="Online"></div>
       </div>
       
-      {/* LISTA DE MENSAGENS */}
+      {/* MENSAGENS */}
       <div className="flex-1 overflow-y-auto custom-scrollbar p-4 space-y-4 bg-[#F8FAFC] dark:bg-[#0F1117]">
         {messages.map((msg, idx) => {
             const isMe = msg.user_id === user?.id;

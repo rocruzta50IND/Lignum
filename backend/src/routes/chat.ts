@@ -5,9 +5,8 @@ import { getIO } from '../lib/socket';
 
 const chatRoutes: FastifyPluginAsync = async (app) => {
   
-  // 1. LISTAR MENSAGENS (Histórico)
+  // 1. LISTAR MENSAGENS
   app.get('/:boardId', { onRequest: [app.authenticate] }, async (req, reply) => {
-    // Validação do param
     const paramsSchema = z.object({ boardId: z.string().uuid() });
     const { boardId } = paramsSchema.parse(req.params);
     
@@ -20,15 +19,14 @@ const chatRoutes: FastifyPluginAsync = async (app) => {
             ORDER BY m.created_at ASC`,
         [boardId]
         );
-        
         return result.rows;
     } catch (error) {
-        console.error("Erro ao listar mensagens:", error);
+        console.error("Erro chat:", error);
         return reply.code(500).send({ error: 'Erro ao carregar chat' });
     }
   });
 
-  // 2. ENVIAR MENSAGEM
+  // 2. ENVIAR MENSAGEM + NOTIFICAR
   app.post('/:boardId', { onRequest: [app.authenticate] }, async (req, reply) => {
     const paramsSchema = z.object({ boardId: z.string().uuid() });
     const bodySchema = z.object({
@@ -36,7 +34,6 @@ const chatRoutes: FastifyPluginAsync = async (app) => {
         mentionedUserIds: z.array(z.string()).optional() 
     });
 
-    // Validações
     const { boardId } = paramsSchema.parse(req.params);
     const body = bodySchema.parse(req.body);
     const userId = req.user.id;
@@ -45,38 +42,41 @@ const chatRoutes: FastifyPluginAsync = async (app) => {
     try {
         await client.query('BEGIN');
 
-        // 1. Salvar Mensagem
+        // Salvar Mensagem
         const res = await client.query(
             `INSERT INTO messages (board_id, user_id, content) VALUES ($1, $2, $3) RETURNING id, content, created_at, user_id`,
             [boardId, userId, body.content]
         );
         const savedMsg = res.rows[0];
 
-        // 2. Buscar Nome E AVATAR do autor (Essencial para o visual)
+        // Buscar dados do autor
         const userRes = await client.query('SELECT name, avatar FROM users WHERE id = $1', [userId]);
         const user = userRes.rows[0];
 
-        // 3. Processar Notificações de Menção
+        // Processar Notificações de Menção
         if (body.mentionedUserIds && body.mentionedUserIds.length > 0) {
             for (const mentionedId of body.mentionedUserIds) {
                 if (mentionedId !== userId) {
-                    await client.query(
+                    // 1. Salva no Banco
+                    const notifContent = `${user.name} te mencionou: "${body.content.substring(0, 20)}..."`;
+                    const notifLink = `/board/${boardId}`;
+                    
+                    const notifRes = await client.query(
                         `INSERT INTO notifications (user_id, type, content, resource_link) 
-                         VALUES ($1, 'mention', $2, $3)`,
-                        [
-                            mentionedId, 
-                            `${user.name} te mencionou: "${body.content.substring(0, 20)}..."`,
-                            `/board/${boardId}`
-                        ]
+                         VALUES ($1, 'mention', $2, $3) RETURNING *`,
+                        [mentionedId, notifContent, notifLink]
                     );
+                    
+                    // 2. EMITE O SOCKET EM TEMPO REAL (A Correção)
+                    const newNotification = notifRes.rows[0];
+                    getIO().to(mentionedId).emit('new_notification', newNotification);
                 }
             }
         }
 
         await client.query('COMMIT');
 
-        // 4. Emitir evento via Socket
-        // O payload deve ser IDÊNTICO ao que vem no GET para o frontend não se perder
+        // Socket do Chat (Geral)
         const msgPayload = {
             id: savedMsg.id,
             content: savedMsg.content,
@@ -85,14 +85,13 @@ const chatRoutes: FastifyPluginAsync = async (app) => {
             user_name: user.name,
             user_avatar: user.avatar 
         };
-        
         getIO().to(boardId).emit('receive_message', msgPayload);
 
         return reply.status(201).send(msgPayload);
 
     } catch (err) {
         await client.query('ROLLBACK');
-        console.error("Erro envio mensagem:", err);
+        console.error(err);
         return reply.code(500).send(err);
     } finally {
         client.release();

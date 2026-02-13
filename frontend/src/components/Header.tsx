@@ -3,8 +3,18 @@ import { useAuth } from '../contexts/AuthContext';
 import { useTheme } from '../contexts/ThemeContext';
 import { useNavigate } from 'react-router-dom';
 import { api } from '../services/api';
+import { socket } from '../services/socket'; // <--- IMPORTANTE: Socket Global
 import { NotificationsMenu } from './NotificationsMenu';
-import { UserAvatar } from './UserAvatar'; // Usando o Avatar Inteligente
+import { UserAvatar } from './UserAvatar';
+
+// Interface local para evitar erros de typescript se não tiver no global
+interface Notification {
+  id: string;
+  content: string;
+  is_read: boolean;
+  resource_link: string;
+  created_at: string;
+}
 
 export const Header: React.FC = () => {
   const { user, signOut } = useAuth();
@@ -12,7 +22,8 @@ export const Header: React.FC = () => {
   const navigate = useNavigate();
   
   const [showNotifications, setShowNotifications] = useState(false);
-  const [notifications, setNotifications] = useState<any[]>([]);
+  const [notifications, setNotifications] = useState<Notification[]>([]);
+  const [unreadCount, setUnreadCount] = useState(0);
   
   // Menu de configurações
   const [showSettingsMenu, setShowSettingsMenu] = useState(false);
@@ -29,38 +40,67 @@ export const Header: React.FC = () => {
     return () => document.removeEventListener('mousedown', handleClickOutside);
   }, [showSettingsMenu]);
 
-  // Função para buscar notificações
+  // Função para buscar notificações iniciais
   const fetchNotifications = async () => {
       try {
           const res = await api.get('/notifications');
           setNotifications(res.data);
+          // Calcula não lidas
+          const count = res.data.filter((n: Notification) => !n.is_read).length;
+          setUnreadCount(count);
       } catch (error) { console.error(error); }
   };
 
-  // 1. CORREÇÃO: Carregar notificações assim que o Header aparece (para mostrar o número)
+  // 1. EFEITO PRINCIPAL: SOCKET + CARGA INICIAL
   useEffect(() => {
       if (user) {
+          // A. Busca inicial via API
           fetchNotifications();
-          // Opcional: Poderíamos colocar um setInterval aqui para polling a cada 30s
+
+          // B. Conecta no Socket (Sala Privada)
+          console.log(`🔔 Header conectando socket para user: ${user.id}`);
+          socket.emit('join_user', user.id);
+
+          // C. Ouve novas notificações em tempo real
+          const handleNewNotification = (newNotif: Notification) => {
+              console.log("🔔 Nova notificação recebida no Header:", newNotif);
+              
+              // Adiciona na lista
+              setNotifications(prev => [newNotif, ...prev]);
+              
+              // Incrementa contador vermelho
+              setUnreadCount(prev => prev + 1);
+
+              // Toca um som suave (opcional - descomente se tiver o arquivo)
+              // new Audio('/notification.mp3').play().catch(() => {});
+          };
+
+          socket.on('new_notification', handleNewNotification);
+
+          // Cleanup ao desmontar
+          return () => {
+              socket.off('new_notification', handleNewNotification);
+              // socket.emit('leave_user', user.id); // Opcional
+          };
       }
   }, [user]);
 
   const toggleNotifications = () => {
-      if (!showNotifications) {
-          fetchNotifications(); // Garante dados frescos ao abrir
-      }
+      // Ao abrir, buscamos de novo só pra garantir
+      if (!showNotifications) fetchNotifications();
       setShowNotifications(!showNotifications);
   };
 
   const markAsRead = async (id: string) => {
       try {
-          await api.patch(`/notifications/${id}/read`);
+          // Atualiza visualmente na hora (Otimista)
           setNotifications(prev => prev.map(n => n.id === id ? { ...n, is_read: true } : n));
+          setUnreadCount(prev => Math.max(0, prev - 1));
+          
+          // Manda pro backend
+          await api.patch(`/notifications/${id}/read`);
       } catch (e) { console.error(e); }
   };
-
-  // Calcula o número de não lidas
-  const unreadCount = notifications.filter(n => !n.is_read).length;
 
   return (
     <header className="h-16 bg-white dark:bg-[#16181D] border-b border-gray-100 dark:border-gray-800/50 flex items-center justify-between px-8 sticky top-0 z-40 transition-colors">
@@ -81,14 +121,19 @@ export const Header: React.FC = () => {
             >
                 <svg className="w-6 h-6" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}><path strokeLinecap="round" strokeLinejoin="round" d="M15 17h5l-1.405-1.405A2.032 2.032 0 0118 14.158V11a6.002 6.002 0 00-4-5.659V5a2 2 0 10-4 0v.341C7.67 6.165 6 8.388 6 11v3.159c0 .538-.214 1.055-.595 1.436L4 17h5m6 0v1a3 3 0 11-6 0v-1m6 0H9" /></svg>
                 
-                {/* 2. CORREÇÃO: Badge Numérico Vermelho */}
+                {/* Badge Numérico Vermelho */}
                 {unreadCount > 0 && (
                     <span className="absolute -top-1 -right-1 flex items-center justify-center min-w-[20px] h-5 px-1 bg-rose-500 text-white text-[10px] font-bold rounded-full border-2 border-white dark:border-[#16181D] animate-in zoom-in">
                         {unreadCount > 9 ? '9+' : unreadCount}
                     </span>
                 )}
             </button>
-            <NotificationsMenu isOpen={showNotifications} onClose={() => setShowNotifications(false)} notifications={notifications} onMarkAsRead={markAsRead} />
+            <NotificationsMenu 
+                isOpen={showNotifications} 
+                onClose={() => setShowNotifications(false)} 
+                notifications={notifications} 
+                onMarkAsRead={markAsRead} 
+            />
         </div>
 
         <div className="h-6 w-px bg-gray-200 dark:bg-gray-700"></div>
