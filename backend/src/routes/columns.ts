@@ -1,7 +1,7 @@
 import { FastifyPluginAsync } from 'fastify';
 import { z } from 'zod';
 import pool from '../database/connection'; 
-import { getIO } from '../lib/socket'; // <--- IMPORTANTE
+import { getIO } from '../lib/socket';
 
 const getColumnsQuerySchema = z.object({ boardId: z.string().uuid().optional() });
 const createColumnBodySchema = z.object({ title: z.string().min(1), boardId: z.string().uuid() });
@@ -13,7 +13,7 @@ const deleteColumnParamsSchema = z.object({ columnId: z.string().uuid() });
 
 const columnsRoutes: FastifyPluginAsync = async (app) => {
   
-  // 1. LISTAR COLUNAS (Mantém igual)
+  // 1. LISTAR COLUNAS (COM LABELS E ANEXOS)
   app.get('/', { onRequest: [app.authenticate] }, async (request, reply) => {
     try {
         const q = getColumnsQuerySchema.safeParse(request.query);
@@ -23,16 +23,18 @@ const columnsRoutes: FastifyPluginAsync = async (app) => {
         const userId = request.user.id;
 
         if (!boardId) {
-            const b = await pool.query('SELECT b.id FROM boards b JOIN board_members bm ON b.id = bm.board_id WHERE bm.user_id = $1 LIMIT 1', [userId]);
+            const b = await pool.query('SELECT b.id FROM boards b JOIN board_members bm ON b.id = bm.board_id WHERE bm.user_id = $1 ORDER BY bm.last_viewed_at DESC LIMIT 1', [userId]);
             if ((b.rowCount || 0) > 0) boardId = b.rows[0].id;
             else return reply.send([]);
         }
 
+        // 1. Colunas
         const columnsRes = await pool.query(
             'SELECT id, title, board_id, order_index as "order" FROM columns WHERE board_id = $1 ORDER BY order_index ASC',
             [boardId]
         );
 
+        // 2. Cards
         const cardsRes = await pool.query(`
             SELECT 
                 k.id, k.title, k.description, k.column_id, k.rank_position,
@@ -44,21 +46,62 @@ const columnsRoutes: FastifyPluginAsync = async (app) => {
             ORDER BY k.rank_position ASC
         `, [boardId]);
 
+        // 3. Labels (Vínculos)
+        const cardLabelsRes = await pool.query(`
+            SELECT cl.card_id, l.id, l.title, l.color
+            FROM card_labels cl
+            JOIN labels l ON cl.label_id = l.id
+            WHERE l.board_id = $1
+        `, [boardId]);
+
+        // 4. ANEXOS (NOVO!) - Busca todos os anexos deste quadro
+        const attachmentsRes = await pool.query(`
+            SELECT a.id, a.card_id, a.file_name, a.file_path, a.file_type, a.created_at
+            FROM attachments a
+            JOIN cards c ON a.card_id = c.id
+            JOIN columns col ON c.column_id = col.id
+            WHERE col.board_id = $1
+            ORDER BY a.created_at DESC
+        `, [boardId]);
+
+        // Montagem dos dados
         const columns = columnsRes.rows.map(col => {
             const colCards = cardsRes.rows.filter(c => c.column_id === col.id);
-            const formattedCards = colCards.map(c => ({
-                id: c.id,
-                title: c.title,
-                description: c.description || '',
-                columnId: c.column_id,
-                order: c.rank_position,
-                priority: c.priority || 'Média',
-                hexColor: c.hex_color || '#2C2C2C',
-                dueDate: c.due_date,
-                assignee: c.assignee,
-                checklist: c.checklist || [],
-                comments: c.comments || []
-            }));
+            
+            const formattedCards = colCards.map(c => {
+                // Labels do card
+                const myLabels = cardLabelsRes.rows
+                    .filter(cl => cl.card_id === c.id)
+                    .map(l => ({ id: l.id, title: l.title, color: l.color }));
+
+                // Anexos do card
+                const myAttachments = attachmentsRes.rows
+                    .filter(a => a.card_id === c.id)
+                    .map(a => ({
+                        id: a.id,
+                        fileName: a.file_name,
+                        filePath: a.file_path, // O front usará isso na URL
+                        fileType: a.file_type,
+                        createdAt: a.created_at
+                    }));
+
+                return {
+                    id: c.id,
+                    title: c.title,
+                    description: c.description || '',
+                    columnId: c.column_id,
+                    order: c.rank_position,
+                    priority: c.priority || 'Média',
+                    hexColor: c.hex_color || '#2C2C2C',
+                    dueDate: c.due_date,
+                    assignee: c.assignee,
+                    checklist: c.checklist || [],
+                    comments: c.comments || [],
+                    labels: myLabels,
+                    attachments: myAttachments // <--- CAMPO NOVO
+                };
+            });
+
             return { ...col, cards: formattedCards, board_id: col.board_id };
         });
 
@@ -70,57 +113,37 @@ const columnsRoutes: FastifyPluginAsync = async (app) => {
     }
   });
 
-  // 2. CRIAR COLUNA (+ SOCKET)
+  // --- RESTO DAS ROTAS (POST/PATCH/DELETE) IGUAIS ---
   app.post('/', { onRequest: [app.authenticate] }, async (req, reply) => {
       try {
         const b = createColumnBodySchema.parse(req.body);
         const c = await pool.query('SELECT COUNT(*) FROM columns WHERE board_id=$1', [b.boardId]);
         const count = parseInt(c.rows[0].count) || 0;
-        
-        const res = await pool.query(
-            'INSERT INTO columns (title, board_id, order_index) VALUES ($1, $2, $3) RETURNING *', 
-            [b.title, b.boardId, count] // count é o novo index (fim da lista)
-        );
-        
+        const res = await pool.query('INSERT INTO columns (title, board_id, order_index) VALUES ($1, $2, $3) RETURNING *', [b.title, b.boardId, count]);
         const newCol = { ...res.rows[0], cards: [], order: res.rows[0].order_index };
-        
-        // AVISAR A GALERA
         getIO().to(b.boardId).emit('column_created', newCol);
-
         return reply.status(201).send(newCol);
-      } catch (error) {
-        console.error("Erro ao criar coluna:", error);
-        return reply.code(500).send(error);
-      }
+      } catch (error) { return reply.code(500).send(error); }
   });
   
-  // 3. ATUALIZAR TÍTULO (+ SOCKET)
   app.patch('/:columnId', { onRequest: [app.authenticate] }, async (req, reply) => {
       const p = updateColumnParamsSchema.parse(req.params); 
       const b = updateColumnBodySchema.parse(req.body);
-      
       const res = await pool.query('UPDATE columns SET title=$1 WHERE id=$2 RETURNING *', [b.title, p.columnId]);
       const updated = res.rows[0];
-
       getIO().to(updated.board_id).emit('column_updated', { id: updated.id, title: updated.title });
-
       return reply.send(updated);
   });
 
-  // 4. MOVER COLUNA (+ SOCKET)
   app.patch('/:columnId/move', { onRequest: [app.authenticate] }, async (req, reply) => {
       const p = moveColumnParamsSchema.parse(req.params);
       const b = moveColumnBodySchema.parse(req.body);
-      
       const curr = await pool.query('SELECT order_index, board_id FROM columns WHERE id=$1', [p.columnId]);
       if (curr.rowCount === 0) return reply.code(404).send();
-
       const oldPos = curr.rows[0].order_index; 
       const boardId = curr.rows[0].board_id; 
       const newPos = b.newPosition;
-
       if (oldPos === newPos) return reply.send({success:true});
-
       const client = await pool.connect();
       try {
           await client.query('BEGIN');
@@ -131,32 +154,18 @@ const columnsRoutes: FastifyPluginAsync = async (app) => {
           }
           await client.query('UPDATE columns SET order_index=$1 WHERE id=$2', [newPos, p.columnId]);
           await client.query('COMMIT');
-          
-          // AVISAR MOVIMENTO
           getIO().to(boardId).emit('column_moved', { columnId: p.columnId, newPosition: newPos });
-
-      } catch(e) { 
-          await client.query('ROLLBACK'); 
-          throw e; 
-      } finally { 
-          client.release(); 
-      }
+      } catch(e) { await client.query('ROLLBACK'); throw e; } finally { client.release(); }
       return reply.send({success:true});
   });
 
-  // 5. DELETAR COLUNA (+ SOCKET)
   app.delete('/:columnId', { onRequest: [app.authenticate] }, async (req, reply) => {
       const p = deleteColumnParamsSchema.parse(req.params);
-      
-      // Busca boardId antes de deletar pra poder avisar na sala certa
       const find = await pool.query('SELECT board_id FROM columns WHERE id=$1', [p.columnId]);
       if (find.rowCount === 0) return reply.send();
       const boardId = find.rows[0].board_id;
-
       await pool.query('DELETE FROM columns WHERE id=$1', [p.columnId]);
-
       getIO().to(boardId).emit('column_deleted', { columnId: p.columnId });
-
       return reply.status(204).send();
   });
 };

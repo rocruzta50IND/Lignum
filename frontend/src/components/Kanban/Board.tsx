@@ -5,10 +5,10 @@ import { SortableContext, arrayMove, sortableKeyboardCoordinates, horizontalList
 import { Column } from './Column'; 
 import { Card } from './Card'; 
 import { CardModal } from './CardModal';
-import type { ColumnWithCards, Card as CardType } from '../../types';
+import type { ColumnWithCards, Card as CardType, Label } from '../../types'; // <--- 1. Adicionado Label
 import { api } from '../../services/api';
 import { socket } from '../../services/socket';
-import { useNavigate } from 'react-router-dom'; // <--- Importante para redirecionar ao sair
+import { useNavigate } from 'react-router-dom';
 
 interface BoardProps {
   initialBoardId?: string;
@@ -29,7 +29,7 @@ export const Board: React.FC<BoardProps> = ({ initialBoardId }) => {
   const [isCreatingColumn, setIsCreatingColumn] = useState(false);
   const [newColumnTitle, setNewColumnTitle] = useState("");
 
-  // NOVO: Estado para o Modal de Bloqueio (Expulsão/Deleção)
+  // Modal de Bloqueio (Expulsão/Deleção)
   const [exitModal, setExitModal] = useState<{ title: string; message: string } | null>(null);
 
   const sensors = useSensors(
@@ -49,7 +49,6 @@ export const Board: React.FC<BoardProps> = ({ initialBoardId }) => {
           if (currentBoardId) {
               const url = `/columns?boardId=${currentBoardId}`;
               const response = await api.get(url);
-              // Ordena cards por rank (order)
               const sorted = response.data.map((col: any) => ({
                   ...col,
                   cards: col.cards.sort((a: any, b: any) => a.order - b.order)
@@ -66,14 +65,14 @@ export const Board: React.FC<BoardProps> = ({ initialBoardId }) => {
   useEffect(() => { fetchBoardData(); }, [fetchBoardData]); 
 
   // ============================================================
-  // ⚡ SOCKET: CARDS + COLUNAS + EXPULSÃO
+  // ⚡ SOCKET: CARDS + COLUNAS + ETIQUETAS + EXPULSÃO
   // ============================================================
   useEffect(() => {
     if (!currentBoardId) return;
 
     socket.emit('join_board', currentBoardId);
 
-    // --- CARDS (Lógica existente) ---
+    // --- CARDS ---
     socket.on('card_created', (newCard: CardType) => {
         setColumns(prev => prev.map(col => {
             if (col.id === newCard.columnId) {
@@ -87,9 +86,9 @@ export const Board: React.FC<BoardProps> = ({ initialBoardId }) => {
     socket.on('card_updated', (updatedCard: CardType) => {
         setColumns(prev => prev.map(col => ({
             ...col,
-            cards: col.cards.map(c => c.id === updatedCard.id ? updatedCard : c)
+            cards: col.cards.map(c => c.id === updatedCard.id ? { ...c, ...updatedCard } : c)
         })));
-        if (selectedCard?.id === updatedCard.id) setSelectedCard(updatedCard);
+        if (selectedCard?.id === updatedCard.id) setSelectedCard(prev => prev ? { ...prev, ...updatedCard } : null);
     });
 
     socket.on('card_moved', ({ cardId, newColumnId, newRankPosition }: any) => {
@@ -132,34 +131,63 @@ export const Board: React.FC<BoardProps> = ({ initialBoardId }) => {
         if (selectedCard?.id === cardId) setSelectedCard(null);
     });
 
-    // --- COLUNAS (AQUI ESTÁ A CORREÇÃO SOLICITADA) ---
+    // --- COLUNAS ---
+    socket.on('column_created', (newCol) => setColumns(prev => prev.some(c => c.id === newCol.id) ? prev : [...prev, newCol]));
+    socket.on('column_updated', ({ id, title }) => setColumns(prev => prev.map(c => c.id === id ? { ...c, title } : c)));
+    socket.on('column_deleted', ({ columnId }) => setColumns(prev => prev.filter(c => c.id !== columnId)));
+    socket.on('column_moved', ({ columnId, newPosition }) => setColumns(prev => {
+        const oldIndex = prev.findIndex(c => c.id === columnId);
+        if (oldIndex === -1) return prev;
+        return arrayMove(prev, oldIndex, newPosition);
+    }));
+
+    // --- 🏷️ ETIQUETAS (LABELS) - CORREÇÃO REAL-TIME ---
     
-    // 1. Coluna Criada por outro usuário
-    socket.on('column_created', (newCol) => {
-        setColumns(prev => {
-            if (prev.some(c => c.id === newCol.id)) return prev;
-            return [...prev, newCol];
-        });
+    // 1. Etiqueta Adicionada
+    socket.on('card_label_added', ({ cardId, label }: { cardId: string, label: Label }) => {
+        setColumns(prev => prev.map(col => ({
+            ...col,
+            cards: col.cards.map(c => {
+                if (c.id === cardId) {
+                    const currentLabels = c.labels || [];
+                    // Evita duplicados visualmente
+                    if (currentLabels.some(l => l.id === label.id)) return c;
+                    return { ...c, labels: [...currentLabels, label] };
+                }
+                return c;
+            })
+        })));
+        
+        // Atualiza o modal também, se estiver aberto nesse card
+        if (selectedCard?.id === cardId) {
+            setSelectedCard(prev => {
+                if (!prev) return null;
+                const currentLabels = prev.labels || [];
+                if (currentLabels.some(l => l.id === label.id)) return prev;
+                return { ...prev, labels: [...currentLabels, label] };
+            });
+        }
     });
 
-    // 2. Coluna Renomeada por outro usuário
-    socket.on('column_updated', ({ id, title }) => {
-        setColumns(prev => prev.map(c => c.id === id ? { ...c, title } : c));
-    });
+    // 2. Etiqueta Removida
+    socket.on('card_label_removed', ({ cardId, labelId }: { cardId: string, labelId: string }) => {
+        setColumns(prev => prev.map(col => ({
+            ...col,
+            cards: col.cards.map(c => {
+                if (c.id === cardId) {
+                    return { ...c, labels: (c.labels || []).filter(l => l.id !== labelId) };
+                }
+                return c;
+            })
+        })));
 
-    // 3. Coluna Excluída por outro usuário
-    socket.on('column_deleted', ({ columnId }) => {
-        setColumns(prev => prev.filter(c => c.id !== columnId));
-    });
-
-    // 4. Coluna Movida por outro usuário
-    socket.on('column_moved', ({ columnId, newPosition }) => {
-        setColumns(prev => {
-            const oldIndex = prev.findIndex(c => c.id === columnId);
-            if (oldIndex === -1) return prev;
-            // Usa arrayMove do dnd-kit para animar a troca visualmente
-            return arrayMove(prev, oldIndex, newPosition);
-        });
+        // Atualiza o modal também
+        if (selectedCard?.id === cardId) {
+            setSelectedCard(prev => {
+                if (!prev) return null;
+                return { ...prev, labels: (prev.labels || []).filter(l => l.id !== labelId) };
+            });
+        }
     });
 
     // --- EXPULSÃO / DELEÇÃO DO QUADRO ---
@@ -182,12 +210,14 @@ export const Board: React.FC<BoardProps> = ({ initialBoardId }) => {
 
     return () => {
         socket.emit('leave_board', currentBoardId);
-        // Limpa todos os ouvintes para não duplicar eventos
+        // Limpa todos os ouvintes
         socket.off('card_created'); socket.off('card_updated'); socket.off('card_moved'); socket.off('card_deleted');
         socket.off('column_created'); socket.off('column_updated'); socket.off('column_moved'); socket.off('column_deleted');
         socket.off('board_deleted'); socket.off('kicked_from_board');
+        // Limpa ouvintes de etiquetas
+        socket.off('card_label_added'); socket.off('card_label_removed');
     };
-  }, [currentBoardId, selectedCard]);
+  }, [currentBoardId, selectedCard?.id]); // Adicionei selectedCard?.id na dependência para garantir atualização correta do modal
 
 
   // ============================================================
@@ -282,7 +312,6 @@ export const Board: React.FC<BoardProps> = ({ initialBoardId }) => {
 
       if (!over) return;
 
-      // COLUNAS (Agora emite e recebe socket)
       if (active.data.current?.type === 'COLUMN') {
           if (active.id !== over.id) {
               const oldIndex = columns.findIndex((col) => col.id === active.id);
@@ -295,7 +324,6 @@ export const Board: React.FC<BoardProps> = ({ initialBoardId }) => {
           return;
       }
 
-      // CARDS
       const activeId = active.id;
       const overId = over.id;
       const activeColumnIndex = columns.findIndex(col => col.cards.some(c => c.id === activeId));
@@ -362,27 +390,11 @@ export const Board: React.FC<BoardProps> = ({ initialBoardId }) => {
 
   return (
     <>
-        <DndContext 
-            sensors={sensors} 
-            collisionDetection={customCollisionDetection} 
-            onDragStart={onDragStart} 
-            onDragOver={onDragOver} 
-            onDragEnd={onDragEnd}
-        >
-        <div id="board-container" 
-            className="flex h-full w-full overflow-x-auto overflow-y-hidden px-4 pb-4 pt-4 gap-6 scrollbar-thin 
-            bg-gray-50 dark:bg-transparent items-start transition-colors duration-300 relative"
-        >
+        <DndContext sensors={sensors} collisionDetection={customCollisionDetection} onDragStart={onDragStart} onDragOver={onDragOver} onDragEnd={onDragEnd}>
+        <div id="board-container" className="flex h-full w-full overflow-x-auto overflow-y-hidden px-4 pb-4 pt-4 gap-6 scrollbar-thin bg-gray-50 dark:bg-transparent items-start transition-colors duration-300 relative">
             <SortableContext items={columnsId} strategy={horizontalListSortingStrategy}>
                 {columns.map((col) => (
-                <Column 
-                    key={col.id} 
-                    column={col} 
-                    onCreateCard={handleCreateCard} 
-                    onDeleteColumn={handleDeleteColumn} 
-                    onCardClick={(card) => setSelectedCard(card)} 
-                    onUpdateColumn={handleUpdateColumn}
-                />
+                <Column key={col.id} column={col} onCreateCard={handleCreateCard} onDeleteColumn={handleDeleteColumn} onCardClick={(card) => setSelectedCard(card)} onUpdateColumn={handleUpdateColumn} />
                 ))}
             </SortableContext>
 
@@ -419,7 +431,6 @@ export const Board: React.FC<BoardProps> = ({ initialBoardId }) => {
         )}
         </DndContext>
 
-        {/* --- MODAL DE EXPULSÃO (BLOQUEIO) --- */}
         {exitModal && (
             <div className="fixed inset-0 z-[99999] flex items-center justify-center p-4 bg-black/80 backdrop-blur-md animate-in fade-in duration-300">
                 <div className="bg-white dark:bg-[#16181D] w-full max-w-sm p-8 rounded-3xl shadow-2xl border border-gray-100 dark:border-gray-800 text-center animate-in zoom-in-95">
@@ -428,12 +439,7 @@ export const Board: React.FC<BoardProps> = ({ initialBoardId }) => {
                     </div>
                     <h2 className="text-2xl font-black text-gray-900 dark:text-white mb-3">{exitModal.title}</h2>
                     <p className="text-gray-500 dark:text-gray-400 text-sm mb-8 leading-relaxed">{exitModal.message}</p>
-                    <button 
-                        onClick={() => navigate('/')} 
-                        className="w-full bg-gray-900 dark:bg-white text-white dark:text-gray-900 font-bold py-4 rounded-2xl hover:scale-[1.02] active:scale-95 transition-all shadow-xl shadow-gray-200 dark:shadow-none"
-                    >
-                        Voltar para o Início
-                    </button>
+                    <button onClick={() => navigate('/')} className="w-full bg-gray-900 dark:bg-white text-white dark:text-gray-900 font-bold py-4 rounded-2xl hover:scale-[1.02] active:scale-95 transition-all shadow-xl shadow-gray-200 dark:shadow-none">Voltar para o Início</button>
                 </div>
             </div>
         )}

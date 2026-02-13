@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { api } from '../../services/api';
-import type { Card, ChecklistItem, Comment } from '../../types';
+import { socket } from '../../services/socket'; 
+import type { Card, ChecklistItem, Comment, Label } from '../../types';
 import { UserAvatar } from '../UserAvatar'; 
 import { useAuth } from '../../contexts/AuthContext';
 
@@ -13,12 +14,14 @@ interface CardModalProps {
   onDelete: () => void;
 }
 
-// Estendendo a interface de Comentário para incluir avatar
 interface ExtendedComment extends Comment {
     userAvatar?: string;
 }
 
-// Função para gerar ID compatível com UUID v4 (funciona em qualquer navegador/rede)
+const LABEL_COLORS = [
+    '#EF4444', '#F97316', '#F59E0B', '#10B981', '#3B82F6', '#6366F1', '#8B5CF6', '#EC4899', '#64748B'
+];
+
 function generateUUID() {
   return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, function(c) {
     const r = Math.random() * 16 | 0;
@@ -40,9 +43,16 @@ export const CardModal: React.FC<CardModalProps> = ({ isOpen, card, boardId, onC
   const [checklist, setChecklist] = useState<ChecklistItem[]>(card.checklist || []);
   const [newChecklistItem, setNewChecklistItem] = useState('');
   
-  // Usando a interface estendida para suportar avatar
   const [comments, setComments] = useState<ExtendedComment[]>(card.comments || []);
   const [newComment, setNewComment] = useState('');
+  
+  // --- LABELS STATE ---
+  const [activeLabels, setActiveLabels] = useState<Label[]>(card.labels || []);
+  const [availableLabels, setAvailableLabels] = useState<Label[]>([]);
+  const [showLabelMenu, setShowLabelMenu] = useState(false);
+  const [newLabelTitle, setNewLabelTitle] = useState('');
+  const [newLabelColor, setNewLabelColor] = useState(LABEL_COLORS[0]);
+  const [isCreatingLabel, setIsCreatingLabel] = useState(false);
   
   const [isDeleting, setIsDeleting] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
@@ -56,43 +66,93 @@ export const CardModal: React.FC<CardModalProps> = ({ isOpen, card, boardId, onC
       setDueDate(card.dueDate ? card.dueDate.split('T')[0] : ''); 
       setChecklist(card.checklist || []); 
       setComments(card.comments || []); 
+      setActiveLabels(card.labels || []);
       setIsDeleting(false); 
   }, [card]);
 
-  // --- CORREÇÃO 1: Usando as variáveis certas (newChecklistItem) ---
+  // Carregar Labels do Board (inicialmente via API ou assumindo vazio até o socket trazer)
+  useEffect(() => {
+      if (isOpen) {
+          api.get(`/columns?boardId=${boardId}`); // Trigger para garantir refresh se necessário
+      }
+  }, [isOpen, boardId]);
+
+  // --- SOCKET LISTENERS ---
+  useEffect(() => {
+      const handleLabelCreated = (label: Label) => {
+          setAvailableLabels(prev => [...prev, label]);
+      };
+      
+      const handleCardLabelAdded = ({ cardId, label }: { cardId: string, label: Label }) => {
+          if (cardId === card.id) {
+              setActiveLabels(prev => {
+                  if (prev.some(l => l.id === label.id)) return prev;
+                  return [...prev, label];
+              });
+          }
+      };
+
+      const handleCardLabelRemoved = ({ cardId, labelId }: { cardId: string, labelId: string }) => {
+          if (cardId === card.id) {
+              setActiveLabels(prev => prev.filter(l => l.id !== labelId));
+          }
+      };
+
+      socket.on('label_created', handleLabelCreated);
+      socket.on('card_label_added', handleCardLabelAdded);
+      socket.on('card_label_removed', handleCardLabelRemoved);
+
+      return () => {
+          socket.off('label_created', handleLabelCreated);
+          socket.off('card_label_added', handleCardLabelAdded);
+          socket.off('card_label_removed', handleCardLabelRemoved);
+      };
+  }, [card.id]);
+
+  const createLabel = async () => {
+      if (!newLabelTitle.trim()) return;
+      setIsCreatingLabel(true);
+      try {
+          const res = await api.post('/labels', {
+              boardId,
+              title: newLabelTitle,
+              color: newLabelColor
+          });
+          setNewLabelTitle('');
+          setIsCreatingLabel(false);
+          toggleLabel(res.data);
+      } catch (e) { console.error(e); setIsCreatingLabel(false); }
+  };
+
+  const toggleLabel = async (label: Label) => {
+      const exists = activeLabels.some(l => l.id === label.id);
+      if (exists) {
+          setActiveLabels(prev => prev.filter(l => l.id !== label.id));
+      } else {
+          setActiveLabels(prev => [...prev, label]);
+      }
+
+      try {
+          await api.post('/labels/toggle', {
+              cardId: card.id,
+              labelId: label.id,
+              boardId
+          });
+      } catch (e) { console.error(e); }
+  };
+
+  // --- CHECKLIST & COMMENTS ---
   const addChecklistItem = () => {
-    if (!newChecklistItem.trim()) return; // Corrigido de newItemText para newChecklistItem
-
-    const newItem: ChecklistItem = {
-        id: generateUUID(), 
-        text: newChecklistItem, // Corrigido de newItemText para newChecklistItem
-        isChecked: false // Corrigido de isCompleted para isChecked (padrão do seu código)
-    };
-
-    const newChecklist = [...checklist, newItem];
-    setChecklist(newChecklist);
-    setNewChecklistItem(''); // Corrigido de setNewItemText para setNewChecklistItem
+    if (!newChecklistItem.trim()) return;
+    const newItem = { id: generateUUID(), text: newChecklistItem, isChecked: false };
+    setChecklist([...checklist, newItem]);
+    setNewChecklistItem('');
   };
-
-  const toggleCheckitem = (itemId: string) => { 
-      setChecklist(prev => prev.map(item => item.id === itemId ? { ...item, isChecked: !item.isChecked } : item)); 
-  };
-
-  const deleteCheckitem = (itemId: string) => { 
-      setChecklist(prev => prev.filter(item => item.id !== itemId)); 
-  };
-
+  const toggleCheckitem = (itemId: string) => setChecklist(prev => prev.map(item => item.id === itemId ? { ...item, isChecked: !item.isChecked } : item));
+  const deleteCheckitem = (itemId: string) => setChecklist(prev => prev.filter(item => item.id !== itemId));
   const addComment = () => { 
       if (!newComment.trim() || !user) return; 
-      
-      const comment: ExtendedComment = { 
-          id: generateUUID(), // --- CORREÇÃO 2: Removido crypto.randomUUID() ---
-          userId: user.id, 
-          userName: user.name, 
-          userAvatar: user.avatar, 
-          content: newComment, 
-          createdAt: new Date().toISOString() 
-      }; 
+      const comment: ExtendedComment = { id: generateUUID(), userId: user.id, userName: user.name, userAvatar: user.avatar, content: newComment, createdAt: new Date().toISOString() }; 
       setComments([comment, ...comments]); 
       setNewComment(''); 
   };
@@ -100,26 +160,11 @@ export const CardModal: React.FC<CardModalProps> = ({ isOpen, card, boardId, onC
   const handleSave = async () => { 
       setIsSaving(true);
       try { 
-          const payload = { 
-              title, 
-              description, 
-              priority, 
-              dueDate: dueDate || null, 
-              checklist, 
-              comments, 
-              columnId: card.columnId 
-          }; 
+          const payload = { title, description, priority, dueDate: dueDate || null, checklist, comments, columnId: card.columnId }; 
           const res = await api.put(`/cards/${card.id}`, payload); 
-          
-          onUpdateLocal(res.data);
+          onUpdateLocal({ ...res.data, labels: activeLabels });
           onClose(); 
-          
-      } catch (e) { 
-          console.error(e); 
-          alert("Erro ao salvar card.");
-      } finally {
-          setIsSaving(false);
-      }
+      } catch (e) { console.error(e); alert("Erro ao salvar card."); } finally { setIsSaving(false); }
   };
 
   const progress = checklist.length > 0 ? Math.round((checklist.filter(i => i.isChecked).length / checklist.length) * 100) : 0;
@@ -135,8 +180,7 @@ export const CardModal: React.FC<CardModalProps> = ({ isOpen, card, boardId, onC
             <div className="flex-1 mr-6">
                 <input value={title} onChange={(e) => setTitle(e.target.value)} className="text-3xl font-extrabold text-gray-800 dark:text-white bg-transparent border-none outline-none focus:ring-0 p-0 w-full tracking-tight placeholder:text-gray-300" placeholder="Título da tarefa" />
                 <div className="flex items-center gap-2 mt-2 text-sm text-gray-500 dark:text-gray-400 font-medium">
-                    <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}><path strokeLinecap="round" strokeLinejoin="round" d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2" /></svg>
-                    Na lista <span className="text-gray-700 dark:text-gray-200 font-bold">Tarefas</span>
+                    <span className="bg-gray-200 dark:bg-gray-700 text-gray-600 dark:text-gray-300 px-2 py-0.5 rounded text-xs uppercase tracking-wide">Tarefas</span>
                 </div>
             </div>
             <button onClick={onClose} className="text-gray-400 hover:text-gray-600 dark:hover:text-white p-2 hover:bg-gray-200/50 dark:hover:bg-[#252830] rounded-full transition-colors">
@@ -146,6 +190,30 @@ export const CardModal: React.FC<CardModalProps> = ({ isOpen, card, boardId, onC
 
         <div className="flex-1 overflow-y-auto custom-scrollbar p-8 grid grid-cols-1 md:grid-cols-3 gap-10 bg-[#F8FAFC] dark:bg-[#0F1117]">
             <div className="md:col-span-2 space-y-10">
+                
+                {/* --- SEÇÃO DE LABELS --- */}
+                {activeLabels.length > 0 && (
+                    <div>
+                        <h3 className="text-xs font-bold text-gray-500 dark:text-gray-400 uppercase tracking-wider mb-3">Etiquetas</h3>
+                        <div className="flex flex-wrap gap-2">
+                            {activeLabels.map(label => (
+                                <span 
+                                    key={label.id} 
+                                    className="px-3 py-1 rounded-lg text-xs font-bold text-white shadow-sm flex items-center gap-2 cursor-pointer hover:opacity-80 transition-opacity"
+                                    style={{ backgroundColor: label.color }}
+                                    onClick={() => toggleLabel(label)}
+                                    title="Clique para remover"
+                                >
+                                    {label.title}
+                                </span>
+                            ))}
+                            <button onClick={() => setShowLabelMenu(!showLabelMenu)} className="px-3 py-1 rounded-lg bg-gray-200 dark:bg-gray-800 text-gray-500 dark:text-gray-400 text-xs font-bold hover:bg-gray-300 dark:hover:bg-gray-700 transition-colors">
+                                +
+                            </button>
+                        </div>
+                    </div>
+                )}
+
                 {/* Descrição */}
                 <div>
                     <h3 className="flex items-center gap-3 text-xs font-bold text-gray-500 dark:text-gray-400 uppercase tracking-wider mb-4">
@@ -188,14 +256,9 @@ export const CardModal: React.FC<CardModalProps> = ({ isOpen, card, boardId, onC
 
                 {/* Comentários */}
                 <div>
-                    <h3 className="flex items-center gap-3 text-xs font-bold text-gray-500 dark:text-gray-400 uppercase tracking-wider mb-6">
-                        <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}><path strokeLinecap="round" strokeLinejoin="round" d="M8 10h.01M12 10h.01M16 10h.01M9 16H5a2 2 0 01-2-2V6a2 2 0 012-2h14a2 2 0 01-2 2v8a2 2 0 01-2 2h-5l-5 5v-5z" /></svg>
-                        Atividade
-                    </h3>
+                    <h3 className="flex items-center gap-3 text-xs font-bold text-gray-500 dark:text-gray-400 uppercase tracking-wider mb-6">Atividade</h3>
                     <div className="flex gap-4 mb-8">
-                        <div className="flex-shrink-0">
-                            <UserAvatar user={user} size="md" />
-                        </div>
+                        <div className="flex-shrink-0"><UserAvatar user={user} size="md" /></div>
                         <div className="flex-1 relative">
                             <textarea ref={commentInputRef} value={newComment} onChange={(e) => setNewComment(e.target.value)} placeholder="Escreva um comentário..." className="w-full bg-white dark:bg-[#1F222A] border border-gray-200 dark:border-gray-700 rounded-xl p-4 text-sm text-gray-800 dark:text-white focus:ring-2 focus:ring-rose-500/50 focus:border-rose-500 focus:outline-none resize-none shadow-sm transition-all pb-12" rows={3} />
                             {newComment && <button onClick={addComment} className="absolute right-3 bottom-3 bg-rose-600 hover:bg-rose-700 text-white px-4 py-1.5 rounded-lg text-xs font-bold transition-all shadow-sm hover:shadow-md hover:scale-105 active:scale-95">Comentar</button>}
@@ -204,13 +267,7 @@ export const CardModal: React.FC<CardModalProps> = ({ isOpen, card, boardId, onC
                     <div className="space-y-6">
                         {comments.map(comment => (
                             <div key={comment.id} className="flex gap-4 group">
-                                <div className="flex-shrink-0">
-                                    <UserAvatar 
-                                        name={comment.userName} 
-                                        src={comment.userAvatar} 
-                                        size="md" 
-                                    />
-                                </div>
+                                <div className="flex-shrink-0"><UserAvatar name={comment.userName} src={comment.userAvatar} size="md" /></div>
                                 <div className="flex-1">
                                     <div className="flex items-center gap-2 mb-1"><span className="font-bold text-sm text-gray-800 dark:text-white">{comment.userName}</span><span className="text-xs text-gray-400 font-medium">{new Date(comment.createdAt).toLocaleString()}</span></div>
                                     <div className="text-sm text-gray-700 dark:text-gray-200 p-3 bg-white dark:bg-[#1F222A] rounded-xl border border-gray-100 dark:border-gray-800/50 shadow-sm leading-relaxed">{comment.content}</div>
@@ -222,6 +279,49 @@ export const CardModal: React.FC<CardModalProps> = ({ isOpen, card, boardId, onC
             </div>
 
             <div className="space-y-8">
+                {/* MENU DE AÇÕES */}
+                <div className="relative">
+                    <label className="block text-xs font-bold text-gray-500 dark:text-gray-400 uppercase mb-3">Ações</label>
+                    <button onClick={() => setShowLabelMenu(!showLabelMenu)} className="w-full text-left px-4 py-3 rounded-xl bg-gray-100 dark:bg-[#1F222A] hover:bg-gray-200 dark:hover:bg-[#252830] transition-colors flex items-center gap-3 text-gray-700 dark:text-gray-200 font-bold text-sm">
+                        <svg className="w-5 h-5 text-gray-500" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}><path strokeLinecap="round" strokeLinejoin="round" d="M7 7h.01M7 3h5c.512 0 1.024.195 1.414.586l7 7a2 2 0 010 2.828l-7 7a2 2 0 01-2.828 0l-7-7A1.994 1.994 0 013 12V7a4 4 0 014-4z" /></svg>
+                        Etiquetas
+                    </button>
+
+                    {showLabelMenu && (
+                        <div className="absolute top-full left-0 mt-2 w-full bg-white dark:bg-[#16181D] rounded-xl shadow-2xl border border-gray-200 dark:border-gray-700 p-4 z-50 animate-in fade-in zoom-in-95">
+                            <h4 className="text-sm font-bold text-gray-800 dark:text-white mb-3">Etiquetas</h4>
+                            
+                            <div className="space-y-2 mb-4 max-h-40 overflow-y-auto custom-scrollbar">
+                                {availableLabels.length === 0 && <p className="text-xs text-gray-400">Nenhuma etiqueta criada.</p>}
+                                {availableLabels.map(l => {
+                                    const isActive = activeLabels.some(al => al.id === l.id);
+                                    return (
+                                        <div key={l.id} onClick={() => toggleLabel(l)} className="flex items-center gap-2 cursor-pointer hover:opacity-80">
+                                            <div className="w-full h-8 rounded-lg flex items-center px-3 text-xs font-bold text-white relative" style={{ backgroundColor: l.color }}>
+                                                {l.title}
+                                                {isActive && <div className="absolute right-2"><svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={3}><path strokeLinecap="round" strokeLinejoin="round" d="M5 13l4 4L19 7" /></svg></div>}
+                                            </div>
+                                        </div>
+                                    );
+                                })}
+                            </div>
+
+                            <hr className="border-gray-100 dark:border-gray-800 my-3" />
+                            
+                            <h5 className="text-xs font-bold text-gray-500 mb-2">Criar nova</h5>
+                            {/* CORREÇÃO DO INPUT DE COR DO TEXTO AQUI: */}
+                            <input value={newLabelTitle} onChange={e => setNewLabelTitle(e.target.value)} placeholder="Nome..." className="w-full bg-gray-50 dark:bg-[#252830] border-none rounded-lg px-3 py-2 text-xs mb-3 text-gray-900 dark:text-white" />
+                            
+                            <div className="flex gap-2 flex-wrap mb-3">
+                                {LABEL_COLORS.map(c => (
+                                    <div key={c} onClick={() => setNewLabelColor(c)} className={`w-6 h-6 rounded-full cursor-pointer border-2 ${newLabelColor === c ? 'border-white ring-2 ring-gray-400' : 'border-transparent'}`} style={{ backgroundColor: c }}></div>
+                                ))}
+                            </div>
+                            <button onClick={createLabel} disabled={!newLabelTitle || isCreatingLabel} className="w-full bg-rose-600 text-white text-xs font-bold py-2 rounded-lg hover:bg-rose-700 transition-colors">Criar</button>
+                        </div>
+                    )}
+                </div>
+
                 <div>
                     <label className="block text-xs font-bold text-gray-500 dark:text-gray-400 uppercase mb-3">Prioridade</label>
                     <div className="flex flex-col gap-2 p-1 bg-gray-100 dark:bg-[#1F222A] rounded-xl border border-gray-200 dark:border-gray-800/50">

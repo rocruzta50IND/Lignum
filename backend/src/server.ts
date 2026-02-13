@@ -12,8 +12,8 @@ import cardsRoutes from './routes/cards';
 import chatRoutes from './routes/chat';
 import usersRoutes from './routes/users';
 import notificationsRoutes from './routes/notifications';
-// NOVO: Importando a rota de boards
 import boardsRoutes from './routes/boards'; 
+import labelsRoutes from './routes/labels'; // <--- 1. NOVO IMPORT
 
 const app = Fastify({
   logger: {
@@ -73,6 +73,8 @@ app.register(chatRoutes, { prefix: '/chat' });
 app.register(boardsRoutes, { prefix: '/boards' });
 app.register(usersRoutes, { prefix: '/users' });
 app.register(notificationsRoutes, { prefix: '/notifications' });
+app.register(labelsRoutes, { prefix: '/labels' }); // <--- 2. NOVA ROTA REGISTRADA
+
 // --- INICIALIZAÇÃO ---
 
 const start = async () => {
