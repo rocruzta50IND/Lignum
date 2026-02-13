@@ -32,7 +32,11 @@ export const Card = ({ card, onClick }: CardProps) => {
   const checklistCompleted = card.checklist?.filter(i => i.isChecked).length || 0;
   const checklistTotal = card.checklist?.length || 0;
   const hasComments = card.comments && card.comments.length > 0;
-  const hasLabels = card.labels && card.labels.length > 0; // Verifica Labels
+  const hasLabels = card.labels && card.labels.length > 0;
+
+  // --- DETECÇÃO DE ANEXOS (NOVO) ---
+  const hasAttachments = card.attachments && card.attachments.length > 0;
+  const attachmentsCount = card.attachments?.length || 0;
 
   if (isDragging) {
     return <div ref={setNodeRef} style={style} className="bg-white dark:bg-[#1F222A] p-4 rounded-2xl shadow-lg border-2 border-rose-500 dark:border-rose-400/50 cursor-grabbing" >
@@ -77,7 +81,6 @@ export const Card = ({ card, onClick }: CardProps) => {
                         style={{ backgroundColor: label.color }}
                         title={label.title}
                     >
-                        {/* Texto só aparece no hover para manter o card limpo, ou se quiser sempre visível mude a classe acima */}
                         <span className="opacity-0 hover:opacity-100 truncate">{label.title}</span>
                     </span>
                 ))}
@@ -117,6 +120,14 @@ export const Card = ({ card, onClick }: CardProps) => {
                 <div className="flex items-center gap-1.5">
                     <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}><path strokeLinecap="round" strokeLinejoin="round" d="M7 8h10M7 12h4m1 8l-4-4H5a2 2 0 01-2-2V6a2 2 0 012-2h14a2 2 0 012 2v8a2 2 0 01-2 2h-3l-4 4z" /></svg>
                     <span>{card.comments?.length}</span>
+                </div>
+            )}
+
+            {/* --- ÍCONE DE ANEXO (NOVO) --- */}
+            {hasAttachments && (
+                <div className="flex items-center gap-1.5 text-blue-500 dark:text-blue-400">
+                    <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}><path strokeLinecap="round" strokeLinejoin="round" d="M15.172 7l-6.586 6.586a2 2 0 102.828 2.828l6.414-6.586a4 4 0 00-5.656-5.656l-6.415 6.585a6 6 0 108.486 8.486L20.5 13" /></svg>
+                    <span>{attachmentsCount}</span>
                 </div>
             )}
             

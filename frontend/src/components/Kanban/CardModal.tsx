@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { api } from '../../services/api';
 import { socket } from '../../services/socket'; 
-import type { Card, ChecklistItem, Comment, Label } from '../../types';
+import type { Card, ChecklistItem, Comment, Label, Attachment } from '../../types';
 import { UserAvatar } from '../UserAvatar'; 
 import { useAuth } from '../../contexts/AuthContext';
 
@@ -34,6 +34,7 @@ export const CardModal: React.FC<CardModalProps> = ({ isOpen, card, boardId, onC
   if (!isOpen) return null;
 
   const { user } = useAuth();
+  const fileInputRef = useRef<HTMLInputElement>(null);
 
   const [title, setTitle] = useState(card.title);
   const [description, setDescription] = useState(card.description || '');
@@ -53,11 +54,19 @@ export const CardModal: React.FC<CardModalProps> = ({ isOpen, card, boardId, onC
   const [newLabelTitle, setNewLabelTitle] = useState('');
   const [newLabelColor, setNewLabelColor] = useState(LABEL_COLORS[0]);
   const [isCreatingLabel, setIsCreatingLabel] = useState(false);
+
+  // --- ATTACHMENTS STATE ---
+  const [attachments, setAttachments] = useState<Attachment[]>(card.attachments || []);
+  const [isUploading, setIsUploading] = useState(false);
   
   const [isDeleting, setIsDeleting] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
   
   const commentInputRef = useRef<HTMLTextAreaElement>(null);
+
+  // --- URL DINÂMICA (CORREÇÃO DE REDE) ---
+  // Pega o IP atual do navegador (ex: 192.168.0.4) e define a porta do backend (3000)
+  const API_URL = `http://${window.location.hostname}:3000`;
 
   useEffect(() => { 
       setTitle(card.title); 
@@ -67,28 +76,23 @@ export const CardModal: React.FC<CardModalProps> = ({ isOpen, card, boardId, onC
       setChecklist(card.checklist || []); 
       setComments(card.comments || []); 
       setActiveLabels(card.labels || []);
+      setAttachments(card.attachments || []); 
       setIsDeleting(false); 
   }, [card]);
 
-  // Carregar Labels do Board (inicialmente via API ou assumindo vazio até o socket trazer)
   useEffect(() => {
       if (isOpen) {
-          api.get(`/columns?boardId=${boardId}`); // Trigger para garantir refresh se necessário
+          api.get(`/columns?boardId=${boardId}`);
       }
   }, [isOpen, boardId]);
 
   // --- SOCKET LISTENERS ---
   useEffect(() => {
-      const handleLabelCreated = (label: Label) => {
-          setAvailableLabels(prev => [...prev, label]);
-      };
+      const handleLabelCreated = (label: Label) => setAvailableLabels(prev => [...prev, label]);
       
       const handleCardLabelAdded = ({ cardId, label }: { cardId: string, label: Label }) => {
           if (cardId === card.id) {
-              setActiveLabels(prev => {
-                  if (prev.some(l => l.id === label.id)) return prev;
-                  return [...prev, label];
-              });
+              setActiveLabels(prev => prev.some(l => l.id === label.id) ? prev : [...prev, label]);
           }
       };
 
@@ -98,26 +102,43 @@ export const CardModal: React.FC<CardModalProps> = ({ isOpen, card, boardId, onC
           }
       };
 
+      const handleAttachmentAdded = ({ cardId, attachment }: { cardId: string, attachment: Attachment }) => {
+        if (cardId === card.id) {
+            // Verifica duplicidade antes de adicionar (segurança extra)
+            setAttachments(prev => {
+                if (prev.some(a => a.id === attachment.id)) return prev;
+                return [...prev, attachment];
+            });
+        }
+      };
+
+      const handleAttachmentRemoved = ({ cardId, attachmentId }: { cardId: string, attachmentId: string }) => {
+        if (cardId === card.id) {
+            setAttachments(prev => prev.filter(a => a.id !== attachmentId));
+        }
+      };
+
       socket.on('label_created', handleLabelCreated);
       socket.on('card_label_added', handleCardLabelAdded);
       socket.on('card_label_removed', handleCardLabelRemoved);
+      socket.on('attachment_added', handleAttachmentAdded);
+      socket.on('attachment_removed', handleAttachmentRemoved);
 
       return () => {
           socket.off('label_created', handleLabelCreated);
           socket.off('card_label_added', handleCardLabelAdded);
           socket.off('card_label_removed', handleCardLabelRemoved);
+          socket.off('attachment_added', handleAttachmentAdded);
+          socket.off('attachment_removed', handleAttachmentRemoved);
       };
   }, [card.id]);
 
+  // --- LABELS LOGIC ---
   const createLabel = async () => {
       if (!newLabelTitle.trim()) return;
       setIsCreatingLabel(true);
       try {
-          const res = await api.post('/labels', {
-              boardId,
-              title: newLabelTitle,
-              color: newLabelColor
-          });
+          const res = await api.post('/labels', { boardId, title: newLabelTitle, color: newLabelColor });
           setNewLabelTitle('');
           setIsCreatingLabel(false);
           toggleLabel(res.data);
@@ -126,19 +147,54 @@ export const CardModal: React.FC<CardModalProps> = ({ isOpen, card, boardId, onC
 
   const toggleLabel = async (label: Label) => {
       const exists = activeLabels.some(l => l.id === label.id);
-      if (exists) {
-          setActiveLabels(prev => prev.filter(l => l.id !== label.id));
-      } else {
-          setActiveLabels(prev => [...prev, label]);
-      }
+      if (exists) setActiveLabels(prev => prev.filter(l => l.id !== label.id));
+      else setActiveLabels(prev => [...prev, label]);
 
+      try { await api.post('/labels/toggle', { cardId: card.id, labelId: label.id, boardId }); } catch (e) { console.error(e); }
+  };
+
+  // --- ATTACHMENTS LOGIC (CORRIGIDA) ---
+  const handleFileSelect = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    if (!e.target.files || e.target.files.length === 0) return;
+    const file = e.target.files[0];
+    
+    setIsUploading(true);
+    const formData = new FormData();
+    formData.append('file', file);
+
+    try {
+        // Envia o cardId na Query String para evitar erro 400
+        await api.post(`/attachments?cardId=${card.id}`, formData, {
+            headers: { 'Content-Type': 'multipart/form-data' }
+        });
+        
+        // CORREÇÃO: Não adicionamos manualmente aqui.
+        // Esperamos o Socket 'attachment_added' fazer o trabalho.
+        // Isso evita o bug de duplicidade visual.
+        
+    } catch (error) {
+        console.error("Erro no upload", error);
+        alert("Erro ao enviar arquivo.");
+    } finally {
+        setIsUploading(false);
+        if (fileInputRef.current) fileInputRef.current.value = '';
+    }
+  };
+
+  const handleDeleteAttachment = async (attachmentId: string) => {
+      if(!confirm("Deseja remover este anexo?")) return;
       try {
-          await api.post('/labels/toggle', {
-              cardId: card.id,
-              labelId: label.id,
-              boardId
-          });
-      } catch (e) { console.error(e); }
+          await api.delete(`/attachments/${attachmentId}`);
+          // Socket cuida da atualização
+      } catch (error) {
+          console.error(error);
+      }
+  };
+
+  const getFileIcon = (type: string) => {
+      if (type.startsWith('image/')) return '🖼️';
+      if (type.includes('pdf')) return '📄';
+      return '📎';
   };
 
   // --- CHECKLIST & COMMENTS ---
@@ -162,7 +218,7 @@ export const CardModal: React.FC<CardModalProps> = ({ isOpen, card, boardId, onC
       try { 
           const payload = { title, description, priority, dueDate: dueDate || null, checklist, comments, columnId: card.columnId }; 
           const res = await api.put(`/cards/${card.id}`, payload); 
-          onUpdateLocal({ ...res.data, labels: activeLabels });
+          onUpdateLocal({ ...res.data, labels: activeLabels, attachments: attachments });
           onClose(); 
       } catch (e) { console.error(e); alert("Erro ao salvar card."); } finally { setIsSaving(false); }
   };
@@ -191,28 +247,78 @@ export const CardModal: React.FC<CardModalProps> = ({ isOpen, card, boardId, onC
         <div className="flex-1 overflow-y-auto custom-scrollbar p-8 grid grid-cols-1 md:grid-cols-3 gap-10 bg-[#F8FAFC] dark:bg-[#0F1117]">
             <div className="md:col-span-2 space-y-10">
                 
-                {/* --- SEÇÃO DE LABELS --- */}
+                {/* --- LABELS --- */}
                 {activeLabels.length > 0 && (
                     <div>
                         <h3 className="text-xs font-bold text-gray-500 dark:text-gray-400 uppercase tracking-wider mb-3">Etiquetas</h3>
                         <div className="flex flex-wrap gap-2">
                             {activeLabels.map(label => (
-                                <span 
-                                    key={label.id} 
-                                    className="px-3 py-1 rounded-lg text-xs font-bold text-white shadow-sm flex items-center gap-2 cursor-pointer hover:opacity-80 transition-opacity"
-                                    style={{ backgroundColor: label.color }}
-                                    onClick={() => toggleLabel(label)}
-                                    title="Clique para remover"
-                                >
+                                <span key={label.id} className="px-3 py-1 rounded-lg text-xs font-bold text-white shadow-sm flex items-center gap-2 cursor-pointer hover:opacity-80 transition-opacity" style={{ backgroundColor: label.color }} onClick={() => toggleLabel(label)} title="Clique para remover">
                                     {label.title}
                                 </span>
                             ))}
-                            <button onClick={() => setShowLabelMenu(!showLabelMenu)} className="px-3 py-1 rounded-lg bg-gray-200 dark:bg-gray-800 text-gray-500 dark:text-gray-400 text-xs font-bold hover:bg-gray-300 dark:hover:bg-gray-700 transition-colors">
-                                +
-                            </button>
+                            <button onClick={() => setShowLabelMenu(!showLabelMenu)} className="px-3 py-1 rounded-lg bg-gray-200 dark:bg-gray-800 text-gray-500 dark:text-gray-400 text-xs font-bold hover:bg-gray-300 dark:hover:bg-gray-700 transition-colors">+</button>
                         </div>
                     </div>
                 )}
+
+                {/* --- ANEXOS --- */}
+                <div>
+                    <h3 className="flex items-center gap-3 text-xs font-bold text-gray-500 dark:text-gray-400 uppercase tracking-wider mb-4">
+                        <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}><path strokeLinecap="round" strokeLinejoin="round" d="M15.172 7l-6.586 6.586a2 2 0 102.828 2.828l6.414-6.586a4 4 0 00-5.656-5.656l-6.415 6.585a6 6 0 108.486 8.486L20.5 13" /></svg>
+                        Anexos
+                    </h3>
+                    
+                    {attachments.length > 0 && (
+                        <div className="grid grid-cols-2 sm:grid-cols-3 gap-3 mb-4">
+                            {attachments.map(att => (
+                                <div key={att.id} className="group relative bg-white dark:bg-[#1F222A] border border-gray-200 dark:border-gray-700 rounded-xl overflow-hidden hover:shadow-md transition-all">
+                                    {att.fileType.startsWith('image/') ? (
+                                        <div className="h-24 w-full bg-gray-100 dark:bg-black/20 flex items-center justify-center overflow-hidden">
+                                            {/* URL CORRIGIDA PARA IP DA REDE */}
+                                            <img src={`${API_URL}/uploads/${att.filePath}`} alt={att.fileName} className="w-full h-full object-cover" />
+                                        </div>
+                                    ) : (
+                                        <div className="h-24 w-full bg-gray-50 dark:bg-[#252830] flex items-center justify-center text-3xl">
+                                            {getFileIcon(att.fileType)}
+                                        </div>
+                                    )}
+                                    <div className="p-2">
+                                        <p className="text-xs font-bold text-gray-700 dark:text-gray-300 truncate" title={att.fileName}>{att.fileName}</p>
+                                        <p className="text-[10px] text-gray-400">{new Date(att.createdAt).toLocaleDateString()}</p>
+                                    </div>
+                                    
+                                    {/* Botão de Download */}
+                                    <a href={`${API_URL}/uploads/${att.filePath}`} target="_blank" rel="noreferrer" className="absolute top-1 right-1 p-1 bg-white/80 dark:bg-black/60 rounded-full text-gray-600 dark:text-white opacity-0 group-hover:opacity-100 transition-opacity hover:scale-110">
+                                        <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}><path strokeLinecap="round" strokeLinejoin="round" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4" /></svg>
+                                    </a>
+
+                                    {/* Botão de Delete */}
+                                    <button onClick={() => handleDeleteAttachment(att.id)} className="absolute top-1 left-1 p-1 bg-red-100/80 dark:bg-red-900/60 rounded-full text-red-600 dark:text-red-300 opacity-0 group-hover:opacity-100 transition-opacity hover:scale-110">
+                                        <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}><path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12" /></svg>
+                                    </button>
+                                </div>
+                            ))}
+                        </div>
+                    )}
+
+                    <div className="flex items-center gap-3">
+                        <button onClick={() => fileInputRef.current?.click()} disabled={isUploading} className="px-4 py-2 bg-gray-100 dark:bg-[#2C2C2C] hover:bg-gray-200 dark:hover:bg-[#353535] rounded-lg text-xs font-bold text-gray-600 dark:text-gray-300 transition-colors flex items-center gap-2">
+                            {isUploading ? (
+                                <>
+                                    <svg className="animate-spin w-4 h-4" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24"><circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle><path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path></svg>
+                                    Enviando...
+                                </>
+                            ) : (
+                                <>
+                                    <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}><path strokeLinecap="round" strokeLinejoin="round" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-8l-4-4m0 0L8 8m4-4v12" /></svg>
+                                    Adicionar anexo
+                                </>
+                            )}
+                        </button>
+                        <input type="file" ref={fileInputRef} onChange={handleFileSelect} className="hidden" />
+                    </div>
+                </div>
 
                 {/* Descrição */}
                 <div>
@@ -309,7 +415,6 @@ export const CardModal: React.FC<CardModalProps> = ({ isOpen, card, boardId, onC
                             <hr className="border-gray-100 dark:border-gray-800 my-3" />
                             
                             <h5 className="text-xs font-bold text-gray-500 mb-2">Criar nova</h5>
-                            {/* CORREÇÃO DO INPUT DE COR DO TEXTO AQUI: */}
                             <input value={newLabelTitle} onChange={e => setNewLabelTitle(e.target.value)} placeholder="Nome..." className="w-full bg-gray-50 dark:bg-[#252830] border-none rounded-lg px-3 py-2 text-xs mb-3 text-gray-900 dark:text-white" />
                             
                             <div className="flex gap-2 flex-wrap mb-3">

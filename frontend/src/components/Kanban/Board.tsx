@@ -5,7 +5,7 @@ import { SortableContext, arrayMove, sortableKeyboardCoordinates, horizontalList
 import { Column } from './Column'; 
 import { Card } from './Card'; 
 import { CardModal } from './CardModal';
-import type { ColumnWithCards, Card as CardType, Label } from '../../types'; // <--- 1. Adicionado Label
+import type { ColumnWithCards, Card as CardType, Label, Attachment } from '../../types'; // <--- 1. Adicionado Attachment
 import { api } from '../../services/api';
 import { socket } from '../../services/socket';
 import { useNavigate } from 'react-router-dom';
@@ -65,7 +65,7 @@ export const Board: React.FC<BoardProps> = ({ initialBoardId }) => {
   useEffect(() => { fetchBoardData(); }, [fetchBoardData]); 
 
   // ============================================================
-  // ⚡ SOCKET: CARDS + COLUNAS + ETIQUETAS + EXPULSÃO
+  // ⚡ SOCKET: CARDS + COLUNAS + ETIQUETAS + ANEXOS + EXPULSÃO
   // ============================================================
   useEffect(() => {
     if (!currentBoardId) return;
@@ -141,16 +141,13 @@ export const Board: React.FC<BoardProps> = ({ initialBoardId }) => {
         return arrayMove(prev, oldIndex, newPosition);
     }));
 
-    // --- 🏷️ ETIQUETAS (LABELS) - CORREÇÃO REAL-TIME ---
-    
-    // 1. Etiqueta Adicionada
+    // --- 🏷️ ETIQUETAS (LABELS) ---
     socket.on('card_label_added', ({ cardId, label }: { cardId: string, label: Label }) => {
         setColumns(prev => prev.map(col => ({
             ...col,
             cards: col.cards.map(c => {
                 if (c.id === cardId) {
                     const currentLabels = c.labels || [];
-                    // Evita duplicados visualmente
                     if (currentLabels.some(l => l.id === label.id)) return c;
                     return { ...c, labels: [...currentLabels, label] };
                 }
@@ -158,7 +155,6 @@ export const Board: React.FC<BoardProps> = ({ initialBoardId }) => {
             })
         })));
         
-        // Atualiza o modal também, se estiver aberto nesse card
         if (selectedCard?.id === cardId) {
             setSelectedCard(prev => {
                 if (!prev) return null;
@@ -169,19 +165,15 @@ export const Board: React.FC<BoardProps> = ({ initialBoardId }) => {
         }
     });
 
-    // 2. Etiqueta Removida
     socket.on('card_label_removed', ({ cardId, labelId }: { cardId: string, labelId: string }) => {
         setColumns(prev => prev.map(col => ({
             ...col,
             cards: col.cards.map(c => {
-                if (c.id === cardId) {
-                    return { ...c, labels: (c.labels || []).filter(l => l.id !== labelId) };
-                }
+                if (c.id === cardId) return { ...c, labels: (c.labels || []).filter(l => l.id !== labelId) };
                 return c;
             })
         })));
 
-        // Atualiza o modal também
         if (selectedCard?.id === cardId) {
             setSelectedCard(prev => {
                 if (!prev) return null;
@@ -190,35 +182,73 @@ export const Board: React.FC<BoardProps> = ({ initialBoardId }) => {
         }
     });
 
+    // --- 📎 ANEXOS (NOVO CÓDIGO AQUI) ---
+    socket.on('attachment_added', ({ cardId, attachment }: { cardId: string, attachment: Attachment }) => {
+        // Atualiza a lista de colunas para o ícone aparecer no card pequeno
+        setColumns(prev => prev.map(col => ({
+            ...col,
+            cards: col.cards.map(c => {
+                if (c.id === cardId) {
+                    const current = c.attachments || [];
+                    // Evita duplicatas se o socket chegar muito rápido
+                    if (current.some(a => a.id === attachment.id)) return c;
+                    return { ...c, attachments: [...current, attachment] };
+                }
+                return c;
+            })
+        })));
+
+        // Se o modal deste card estiver aberto, atualiza ele também
+        if (selectedCard?.id === cardId) {
+            setSelectedCard(prev => {
+                if (!prev) return null;
+                const current = prev.attachments || [];
+                if (current.some(a => a.id === attachment.id)) return prev;
+                return { ...prev, attachments: [...current, attachment] };
+            });
+        }
+    });
+
+    socket.on('attachment_removed', ({ cardId, attachmentId }: { cardId: string, attachmentId: string }) => {
+        setColumns(prev => prev.map(col => ({
+            ...col,
+            cards: col.cards.map(c => {
+                if (c.id === cardId) {
+                    return { ...c, attachments: (c.attachments || []).filter(a => a.id !== attachmentId) };
+                }
+                return c;
+            })
+        })));
+
+        if (selectedCard?.id === cardId) {
+            setSelectedCard(prev => {
+                if (!prev) return null;
+                return { ...prev, attachments: (prev.attachments || []).filter(a => a.id !== attachmentId) };
+            });
+        }
+    });
+
     // --- EXPULSÃO / DELEÇÃO DO QUADRO ---
-    
     socket.on('board_deleted', () => {
-        setExitModal({ 
-            title: 'Quadro Excluído', 
-            message: 'O dono deste quadro o excluiu permanentemente. Você precisa voltar ao início.' 
-        });
+        setExitModal({ title: 'Quadro Excluído', message: 'O dono deste quadro o excluiu permanentemente. Você precisa voltar ao início.' });
         setSelectedCard(null);
     });
 
     socket.on('kicked_from_board', () => {
-        setExitModal({ 
-            title: 'Acesso Revogado', 
-            message: 'Você foi removido deste quadro por um administrador.' 
-        });
+        setExitModal({ title: 'Acesso Revogado', message: 'Você foi removido deste quadro por um administrador.' });
         setSelectedCard(null);
     });
 
     return () => {
         socket.emit('leave_board', currentBoardId);
-        // Limpa todos os ouvintes
+        // Limpeza dos listeners
         socket.off('card_created'); socket.off('card_updated'); socket.off('card_moved'); socket.off('card_deleted');
         socket.off('column_created'); socket.off('column_updated'); socket.off('column_moved'); socket.off('column_deleted');
         socket.off('board_deleted'); socket.off('kicked_from_board');
-        // Limpa ouvintes de etiquetas
         socket.off('card_label_added'); socket.off('card_label_removed');
+        socket.off('attachment_added'); socket.off('attachment_removed'); // <--- Limpeza dos novos listeners
     };
-  }, [currentBoardId, selectedCard?.id]); // Adicionei selectedCard?.id na dependência para garantir atualização correta do modal
-
+  }, [currentBoardId, selectedCard?.id]); 
 
   // ============================================================
   // DRAG AND DROP HANDLERS (MANTIDOS)
