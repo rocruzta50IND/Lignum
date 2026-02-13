@@ -1,7 +1,8 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { api } from '../services/api';
+import { socket } from '../services/socket'; // <--- IMPORTANTE
 import { useAuth } from '../contexts/AuthContext';
-import { UserAvatar } from './UserAvatar'; // <--- 1. Usando Avatar Oficial
+import { UserAvatar } from './UserAvatar';
 
 interface User { id: string; name: string; email: string; avatar?: string; }
 interface BoardSettingsModalProps {
@@ -19,18 +20,39 @@ export const BoardSettingsModal: React.FC<BoardSettingsModalProps> = ({ isOpen, 
   const [members, setMembers] = useState<User[]>(board.members || []);
   const [availableUsers, setAvailableUsers] = useState<User[]>([]);
   
-  // Select
   const [selectedUserId, setSelectedUserId] = useState("");
   const [isSelectOpen, setIsSelectOpen] = useState(false);
   const selectRef = useRef<HTMLDivElement>(null);
 
-  // Modais Internos
   const [memberToRemove, setMemberToRemove] = useState<User | null>(null);
   const [deleteConfirmation, setDeleteConfirmation] = useState("");
   const [isLoading, setIsLoading] = useState(false);
 
-  // Quem sou eu nesse quadro?
   const isOwner = board.created_by === user?.id; 
+
+  // --- SOCKET PARA ATUALIZAR LISTA DE MEMBROS ---
+  useEffect(() => {
+      // 1. Membro Adicionado (Atualiza lista)
+      const handleMemberAdded = (newMember: User) => {
+          setMembers(prev => {
+              if (prev.some(m => m.id === newMember.id)) return prev;
+              return [...prev, newMember];
+          });
+      };
+
+      // 2. Membro Removido (Atualiza lista)
+      const handleMemberRemoved = ({ userId }: { userId: string }) => {
+          setMembers(prev => prev.filter(m => m.id !== userId));
+      };
+
+      socket.on('member_added', handleMemberAdded);
+      socket.on('member_removed', handleMemberRemoved);
+
+      return () => {
+          socket.off('member_added', handleMemberAdded);
+          socket.off('member_removed', handleMemberRemoved);
+      };
+  }, []);
 
   useEffect(() => {
       setMembers(board.members || []);
@@ -59,11 +81,8 @@ export const BoardSettingsModal: React.FC<BoardSettingsModalProps> = ({ isOpen, 
       setIsLoading(true);
       try {
           await api.post(`/boards/${board.id}/members`, { userId: selectedUserId });
-          
-          const userToAdd = availableUsers.find(u => u.id === selectedUserId);
-          if (userToAdd) setMembers(prev => [...prev, userToAdd]);
-
-          onUpdate();
+          // O Socket 'member_added' vai atualizar a lista visualmente
+          onUpdate(); // Atualiza dados no componente pai também
           setSelectedUserId("");
           setIsSelectOpen(false);
       } catch (error) {
@@ -79,7 +98,7 @@ export const BoardSettingsModal: React.FC<BoardSettingsModalProps> = ({ isOpen, 
       setIsLoading(true);
       try {
           await api.delete(`/boards/${board.id}/members/${memberToRemove.id}`);
-          setMembers(prev => prev.filter(m => m.id !== memberToRemove.id));
+          // O Socket 'member_removed' vai atualizar a lista visualmente
           onUpdate();
           setMemberToRemove(null);
       } catch (error) {
@@ -94,7 +113,7 @@ export const BoardSettingsModal: React.FC<BoardSettingsModalProps> = ({ isOpen, 
       setIsLoading(true);
       try {
           await api.delete(`/boards/${board.id}`);
-          onUpdate();
+          // O socket 'board_deleted' vai expulsar todos da página no Board.tsx
           onClose();
       } catch (error) {
           alert("Erro ao excluir quadro.");
@@ -103,14 +122,14 @@ export const BoardSettingsModal: React.FC<BoardSettingsModalProps> = ({ isOpen, 
       }
   };
 
-  // NOVA AÇÃO: Sair do Quadro
   const handleLeaveBoard = async () => {
       if (!window.confirm(`Sair do quadro "${board.title}"?`)) return;
       setIsLoading(true);
       try {
           await api.delete(`/boards/${board.id}/members/${user?.id}`);
-          onUpdate();
           onClose();
+          // O socket 'kicked_from_board' cuidará do redirect ou o próprio frontend navega
+          window.location.href = '/dashboard'; // Força saída
       } catch (error) {
           alert("Erro ao sair do quadro.");
       } finally {
@@ -163,7 +182,7 @@ export const BoardSettingsModal: React.FC<BoardSettingsModalProps> = ({ isOpen, 
             {/* ABA MEMBROS */}
             {activeTab === 'members' && (
                 <div className="space-y-6">
-                    {/* Add Member (Só DONO vê o input de adicionar, ou todos? Normalmente só dono ou admin. Vou deixar livre mas você pode bloquear com !isOwner se quiser) */}
+                    {/* Add Member */}
                     <div className="bg-gray-50 dark:bg-[#1F222A] p-4 rounded-xl border border-gray-100 dark:border-gray-800">
                         <label className="block text-xs font-bold text-gray-500 uppercase mb-2">Convidar novo membro</label>
                         <div className="flex gap-2">
@@ -174,16 +193,16 @@ export const BoardSettingsModal: React.FC<BoardSettingsModalProps> = ({ isOpen, 
                                 </button>
                                 {isSelectOpen && (
                                     <div className="absolute top-full mt-2 w-full bg-white dark:bg-[#16181D] border border-gray-200 dark:border-gray-700 rounded-xl shadow-xl z-50 max-h-48 overflow-y-auto custom-scrollbar animate-in fade-in zoom-in-95">
-                                        {filteredUsers.length === 0 ? (
-                                            <div className="p-3 text-center text-xs text-gray-400">Nenhum usuário disponível.</div>
-                                        ) : (
-                                            filteredUsers.map(u => (
-                                                <div key={u.id} onClick={() => { setSelectedUserId(u.id); setIsSelectOpen(false); }} className="flex items-center gap-3 p-3 hover:bg-gray-50 dark:hover:bg-[#252830] cursor-pointer transition-colors border-b border-gray-50 dark:border-gray-800 last:border-0">
-                                                    <UserAvatar user={u} size="sm" className="w-8 h-8 text-xs" />
-                                                    <div className="text-left"><p className="text-sm font-bold text-gray-700 dark:text-gray-200">{u.name}</p><p className="text-xs text-gray-400">{u.email}</p></div>
-                                                </div>
-                                            ))
-                                        )}
+                                            {filteredUsers.length === 0 ? (
+                                                <div className="p-3 text-center text-xs text-gray-400">Nenhum usuário disponível.</div>
+                                            ) : (
+                                                filteredUsers.map(u => (
+                                                    <div key={u.id} onClick={() => { setSelectedUserId(u.id); setIsSelectOpen(false); }} className="flex items-center gap-3 p-3 hover:bg-gray-50 dark:hover:bg-[#252830] cursor-pointer transition-colors border-b border-gray-50 dark:border-gray-800 last:border-0">
+                                                        <UserAvatar user={u} size="sm" className="w-8 h-8 text-xs" />
+                                                        <div className="text-left"><p className="text-sm font-bold text-gray-700 dark:text-gray-200">{u.name}</p><p className="text-xs text-gray-400">{u.email}</p></div>
+                                                    </div>
+                                                ))
+                                            )}
                                     </div>
                                 )}
                             </div>
@@ -202,17 +221,16 @@ export const BoardSettingsModal: React.FC<BoardSettingsModalProps> = ({ isOpen, 
                                 return (
                                 <div key={member.id} className="flex items-center justify-between p-3 bg-white dark:bg-[#1F222A] border border-gray-100 dark:border-gray-800 rounded-xl group hover:border-gray-300 dark:hover:border-gray-600 transition-colors">
                                     <div className="flex items-center gap-3">
-                                        <UserAvatar user={member} size="sm" />
-                                        <div>
-                                            <p className="text-sm font-bold text-gray-800 dark:text-white flex items-center gap-2">
-                                                {member.name} 
-                                                {isMe && <span className="text-[10px] bg-gray-100 dark:bg-gray-700 text-gray-500 px-1.5 py-0.5 rounded">Você</span>}
-                                                {isMemberOwner && <span className="text-[10px] bg-yellow-100 dark:bg-yellow-900/30 text-yellow-600 px-1.5 py-0.5 rounded border border-yellow-200 dark:border-yellow-800">Dono</span>}
-                                            </p>
-                                        </div>
+                                            <UserAvatar user={member} size="sm" />
+                                            <div>
+                                                <p className="text-sm font-bold text-gray-800 dark:text-white flex items-center gap-2">
+                                                    {member.name} 
+                                                    {isMe && <span className="text-[10px] bg-gray-100 dark:bg-gray-700 text-gray-500 px-1.5 py-0.5 rounded">Você</span>}
+                                                    {isMemberOwner && <span className="text-[10px] bg-yellow-100 dark:bg-yellow-900/30 text-yellow-600 px-1.5 py-0.5 rounded border border-yellow-200 dark:border-yellow-800">Dono</span>}
+                                                </p>
+                                            </div>
                                     </div>
                                     
-                                    {/* 2. LÓGICA DE PERMISSÃO: Só mostro a lixeira se EU for DONO e o alvo NÃO for eu */}
                                     {isOwner && !isMe && (
                                         <button 
                                             onClick={() => setMemberToRemove(member)}
@@ -232,7 +250,6 @@ export const BoardSettingsModal: React.FC<BoardSettingsModalProps> = ({ isOpen, 
             {/* ABA DANGER */}
             {activeTab === 'danger' && (
                 <div className="space-y-6">
-                    {/* 3. LÓGICA DE PERMISSÃO: Se sou DONO, vejo Excluir. Se NÃO, vejo Sair. */}
                     {isOwner ? (
                         <div className="bg-red-50 dark:bg-red-900/10 border border-red-100 dark:border-red-900/30 p-4 rounded-xl">
                             <h4 className="text-red-700 dark:text-red-400 font-bold text-sm mb-2">Excluir este quadro permanentemente</h4>

@@ -31,15 +31,22 @@ export const NotificationsMenu: React.FC<NotificationsMenuProps> = ({ isOpen, on
   if (!isOpen) return null;
 
   const handleClick = (notif: Notification) => {
-      onMarkAsRead(notif.id);
+      // Navegação ao clicar
       if(notif.resource_link && notif.resource_link !== '#') {
           navigate(notif.resource_link);
           onClose();
       }
   };
 
+  // Nova função para o Hover
+  const handleHover = (notif: Notification) => {
+      if (!notif.is_read) {
+          onMarkAsRead(notif.id); // Chama a função que já atualiza o contador e a cor
+      }
+  };
+
   return (
-    <div ref={menuRef} className="absolute top-16 right-16 w-80 bg-white dark:bg-[#16181D] rounded-2xl shadow-2xl border border-gray-200 dark:border-gray-800 py-2 z-50 animate-in fade-in zoom-in-95 duration-200 origin-top-right">
+    <div ref={menuRef} className="absolute top-16 right-0 w-80 bg-white dark:bg-[#16181D] rounded-2xl shadow-2xl border border-gray-200 dark:border-gray-800 py-2 z-50 animate-in fade-in zoom-in-95 duration-200 origin-top-right">
       <div className="px-5 py-3 border-b border-gray-100 dark:border-gray-800/50 mb-1 flex justify-between items-center">
         <p className="text-sm font-bold text-gray-800 dark:text-white">Notificações</p>
         {notifications.length > 0 && (
@@ -60,18 +67,19 @@ export const NotificationsMenu: React.FC<NotificationsMenuProps> = ({ isOpen, on
                   <div 
                     key={n.id} 
                     onClick={() => handleClick(n)}
-                    className={`relative px-4 py-3.5 cursor-pointer transition-all border-b border-gray-50 dark:border-gray-800/30 last:border-0 group 
+                    onMouseEnter={() => handleHover(n)} // <--- A MÁGICA ACONTECE AQUI
+                    className={`relative px-4 py-3.5 cursor-pointer transition-all duration-500 border-b border-gray-50 dark:border-gray-800/30 last:border-0 group 
                     ${!n.is_read 
-                        ? 'bg-blue-50/40 dark:bg-blue-900/10 hover:bg-blue-50 dark:hover:bg-blue-900/20' // Azul sutil para não lidas
-                        : 'hover:bg-gray-50 dark:hover:bg-[#1F222A]' // Padrão para lidas
+                        ? 'bg-blue-50/60 dark:bg-blue-900/20' // Fundo mais visível quando não lida
+                        : 'bg-transparent hover:bg-gray-50 dark:hover:bg-[#1F222A]' // Fundo limpo quando lida
                     }`}
                   >
                       <div className="flex gap-3">
-                          {/* Indicador visual de não lido (Bolinha azul) */}
-                          <div className={`mt-1.5 w-2 h-2 rounded-full flex-shrink-0 ${!n.is_read ? 'bg-blue-500' : 'bg-transparent'}`}></div>
+                          {/* Indicador visual (Bolinha) - Some suavemente com transition-opacity */}
+                          <div className={`mt-1.5 w-2 h-2 rounded-full flex-shrink-0 transition-all duration-300 ${!n.is_read ? 'bg-blue-500 opacity-100 scale-100' : 'bg-transparent opacity-0 scale-0'}`}></div>
                           
                           <div>
-                              <p className={`text-sm leading-snug ${!n.is_read ? 'font-semibold text-gray-900 dark:text-gray-100' : 'text-gray-600 dark:text-gray-400'}`}>
+                              <p className={`text-sm leading-snug transition-all duration-300 ${!n.is_read ? 'font-bold text-gray-900 dark:text-white' : 'font-medium text-gray-600 dark:text-gray-400'}`}>
                                   {n.content}
                               </p>
                               <p className="text-[10px] text-gray-400 mt-1.5 flex items-center gap-1">

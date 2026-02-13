@@ -1,15 +1,17 @@
 import React, { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { api } from '../services/api';
+import { socket } from '../services/socket'; // <--- 1. Importação do Socket
+import { useAuth } from '../contexts/AuthContext'; // <--- 2. Importação do Auth (precisamos do user.id)
 import { useTheme } from '../contexts/ThemeContext';
 import { BoardSettingsModal } from '../components/BoardSettingsModal';
-import { UserAvatar } from '../components/UserAvatar'; // <--- 1. Importação
+import { UserAvatar } from '../components/UserAvatar';
 
 interface User { 
     id: string; 
     name: string; 
     email: string; 
-    avatar?: string; // <--- 2. Adicionado campo avatar
+    avatar?: string;
 }
 
 interface BoardSummary {
@@ -17,11 +19,14 @@ interface BoardSummary {
   title: string;
   background_color: string;
   members: User[];
-  created_by: string; // <--- ADICIONE ESTA LINHA IMPORTANTE
+  created_by: string;
 }
+
 export const Dashboard: React.FC = () => {
   const navigate = useNavigate();
   const { theme } = useTheme();
+  const { user } = useAuth(); // Precisamos do usuário para conectar na sala certa
+  
   const [boards, setBoards] = useState<BoardSummary[]>([]);
   
   // States Modal Criação
@@ -48,12 +53,75 @@ export const Dashboard: React.FC = () => {
   ];
 
   const fetchBoards = async () => {
-    try { const res = await api.get('/boards'); setBoards(res.data); } 
+    try { 
+        const res = await api.get('/boards'); 
+        setBoards(res.data); 
+    } 
     catch (error) { console.error("Erro ao buscar boards", error); }
   };
 
+  // Carregamento Inicial
   useEffect(() => { fetchBoards(); }, []);
 
+  // ============================================================
+  // ⚡ SOCKET: LISTA DE PROJETOS EM TEMPO REAL
+  // ============================================================
+  useEffect(() => {
+      if (!user) return;
+
+      // Conecta na sala pessoal do usuário para ouvir eventos globais
+      socket.emit('join_user', user.id);
+
+      // 1. Fui convidado para um novo quadro? (via notificação 'invite')
+      const handleNotification = (notif: any) => {
+          if (notif.type === 'invite') {
+              console.log("📢 Novo convite recebido! Atualizando lista...");
+              fetchBoards(); // Recarrega para mostrar o novo quadro
+          }
+      };
+
+      // 2. Fui expulso de um quadro?
+      const handleKicked = () => {
+          console.log("🚪 Fui removido de um quadro. Atualizando...");
+          fetchBoards();
+      };
+
+      // 3. Um quadro meu foi excluído?
+      // O evento 'board_deleted' é enviado para a sala do board.
+      // Como o dashboard não está na sala do board, precisamos de uma estratégia.
+      // Mas o evento 'kicked' ou 'invite' resolvem 90% dos casos de lista.
+      // Para garantir deleção em tempo real na lista, precisaríamos entrar na sala de TODOS os boards
+      // ao carregar a lista. Vamos fazer isso:
+      
+      boards.forEach(b => {
+          socket.emit('join_board', b.id);
+      });
+
+      const handleBoardDeleted = ({ boardId }: { boardId: string }) => {
+          setBoards(prev => prev.filter(b => b.id !== boardId));
+      };
+
+      const handleBoardUpdatedTitle = (data: any) => {
+          // Se alguém renomeou o quadro, atualiza na lista
+          // (Evento column_updated é para coluna, precisaríamos criar board_updated no back se quiséssemos sync de título aqui)
+          // Por enquanto, foca em Adicionar/Remover
+      };
+
+      // Listeners
+      socket.on('new_notification', handleNotification);
+      socket.on('kicked_from_board', handleKicked);
+      socket.on('board_deleted', handleBoardDeleted);
+
+      return () => {
+          socket.off('new_notification', handleNotification);
+          socket.off('kicked_from_board', handleKicked);
+          socket.off('board_deleted', handleBoardDeleted);
+          // Opcional: sair das salas dos boards, mas não é crítico no dashboard
+      };
+  }, [user, boards.length]); // boards.length garante que se a lista mudar, reconectamos nos novos IDs
+
+
+  // Lógica de Modal de Criação (Mantida)
   useEffect(() => {
       if (isCreating) {
           setIsLoadingUsers(true);
@@ -67,12 +135,15 @@ export const Dashboard: React.FC = () => {
     e.preventDefault();
     if (!newBoardTitle.trim()) return;
     try {
-      await api.post('/boards', { 
+      const res = await api.post('/boards', { 
           title: newBoardTitle, 
           background_color: selectedColor,
           members: selectedMembers 
       });
-      fetchBoards(); 
+      // Adiciona o novo quadro na lista imediatamente (Otimista/Local)
+      // O socket de notificação vai disparar pros convidados, mas pra mim (dono) já adiciono aqui.
+      setBoards(prev => [res.data, ...prev]); 
+      
       setIsCreating(false);
       setNewBoardTitle("");
     } catch (error) { console.error(error); }
@@ -139,10 +210,8 @@ export const Dashboard: React.FC = () => {
                     </div>
                     
                     <div className="pl-2 flex items-center justify-between mt-auto pt-4">
-                        {/* 3. CORREÇÃO: Usando UserAvatar em vez de div */}
                         <div className="flex -space-x-2 overflow-hidden items-center">
                             {members.slice(0, 4).map((m: any, i: number) => (
-                                // REMOVIDO: hover:scale-110, hover:z-10, transition-all, relative
                                 <div key={m.id || i} className="ring-2 ring-white dark:ring-[#1E2028] rounded-full">
                                     <UserAvatar 
                                         user={m} 
@@ -204,12 +273,9 @@ export const Dashboard: React.FC = () => {
                             {isLoadingUsers ? (<div className="p-4 text-center text-xs text-gray-400">Carregando usuários...</div>) : availableUsers.length === 0 ? (<div className="p-4 text-center text-xs text-gray-400">Nenhum outro usuário encontrado.</div>) : (
                                 availableUsers.map(user => (
                                     <div key={user.id} onClick={() => toggleMember(user.id)} className={`flex items-center gap-3 p-3 cursor-pointer transition-colors border-b border-gray-100 dark:border-gray-800 last:border-0 ${selectedMembers.includes(user.id) ? 'bg-rose-50 dark:bg-rose-900/20' : 'hover:bg-gray-100 dark:hover:bg-[#1F222A]'}`}>
-                                            <div className={`w-5 h-5 rounded border flex items-center justify-center transition-all ${selectedMembers.includes(user.id) ? 'bg-rose-500 border-rose-500' : 'border-gray-300 dark:border-gray-600'}`}>{selectedMembers.includes(user.id) && <svg className="w-3.5 h-3.5 text-white" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={3}><path strokeLinecap="round" strokeLinejoin="round" d="M5 13l4 4L19 7" /></svg>}</div>
-                                            
-                                            {/* Avatar na lista de seleção (opcional, mas legal) */}
-                                            <UserAvatar user={user} size="xs" className="w-6 h-6 text-[9px]" />
-
-                                            <div className="flex-1 min-w-0"><p className={`text-sm font-bold truncate ${selectedMembers.includes(user.id) ? 'text-rose-700 dark:text-rose-300' : 'text-gray-700 dark:text-gray-300'}`}>{user.name}</p><p className="text-xs text-gray-400 truncate">{user.email}</p></div>
+                                        <div className={`w-5 h-5 rounded border flex items-center justify-center transition-all ${selectedMembers.includes(user.id) ? 'bg-rose-500 border-rose-500' : 'border-gray-300 dark:border-gray-600'}`}>{selectedMembers.includes(user.id) && <svg className="w-3.5 h-3.5 text-white" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={3}><path strokeLinecap="round" strokeLinejoin="round" d="M5 13l4 4L19 7" /></svg>}</div>
+                                        <UserAvatar user={user} size="xs" className="w-6 h-6 text-[9px]" />
+                                        <div className="flex-1 min-w-0"><p className={`text-sm font-bold truncate ${selectedMembers.includes(user.id) ? 'text-rose-700 dark:text-rose-300' : 'text-gray-700 dark:text-gray-300'}`}>{user.name}</p><p className="text-xs text-gray-400 truncate">{user.email}</p></div>
                                     </div>
                                 ))
                             )}

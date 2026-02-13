@@ -8,6 +8,7 @@ import { CardModal } from './CardModal';
 import type { ColumnWithCards, Card as CardType } from '../../types';
 import { api } from '../../services/api';
 import { socket } from '../../services/socket';
+import { useNavigate } from 'react-router-dom'; // <--- Importante para redirecionar ao sair
 
 interface BoardProps {
   initialBoardId?: string;
@@ -18,6 +19,7 @@ const dropAnimation: DropAnimation = {
 };
 
 export const Board: React.FC<BoardProps> = ({ initialBoardId }) => {
+  const navigate = useNavigate();
   
   const [columns, setColumns] = useState<ColumnWithCards[]>([]);
   const [currentBoardId, setCurrentBoardId] = useState<string | null>(initialBoardId || null);
@@ -26,6 +28,9 @@ export const Board: React.FC<BoardProps> = ({ initialBoardId }) => {
   const [selectedCard, setSelectedCard] = useState<CardType | null>(null);
   const [isCreatingColumn, setIsCreatingColumn] = useState(false);
   const [newColumnTitle, setNewColumnTitle] = useState("");
+
+  // NOVO: Estado para o Modal de Bloqueio (Expulsão/Deleção)
+  const [exitModal, setExitModal] = useState<{ title: string; message: string } | null>(null);
 
   const sensors = useSensors(
     useSensor(PointerSensor, { activationConstraint: { distance: 5 } }),
@@ -44,12 +49,11 @@ export const Board: React.FC<BoardProps> = ({ initialBoardId }) => {
           if (currentBoardId) {
               const url = `/columns?boardId=${currentBoardId}`;
               const response = await api.get(url);
-              // Ordena cards por rank
+              // Ordena cards por rank (order)
               const sorted = response.data.map((col: any) => ({
                   ...col,
                   cards: col.cards.sort((a: any, b: any) => a.order - b.order)
               }));
-              // O backend já manda as colunas ordenadas por order_index, mas garantimos aqui se precisar
               setColumns(sorted);
           } 
           else {
@@ -62,14 +66,14 @@ export const Board: React.FC<BoardProps> = ({ initialBoardId }) => {
   useEffect(() => { fetchBoardData(); }, [fetchBoardData]); 
 
   // ============================================================
-  // ⚡ SOCKET: CARDS E COLUNAS
+  // ⚡ SOCKET: CARDS + COLUNAS + EXPULSÃO
   // ============================================================
   useEffect(() => {
     if (!currentBoardId) return;
 
     socket.emit('join_board', currentBoardId);
 
-    // --- CARDS (Igual antes) ---
+    // --- CARDS (Lógica existente) ---
     socket.on('card_created', (newCard: CardType) => {
         setColumns(prev => prev.map(col => {
             if (col.id === newCard.columnId) {
@@ -128,9 +132,9 @@ export const Board: React.FC<BoardProps> = ({ initialBoardId }) => {
         if (selectedCard?.id === cardId) setSelectedCard(null);
     });
 
-    // --- COLUNAS (NOVO!) ---
+    // --- COLUNAS (AQUI ESTÁ A CORREÇÃO SOLICITADA) ---
     
-    // 1. Coluna Criada
+    // 1. Coluna Criada por outro usuário
     socket.on('column_created', (newCol) => {
         setColumns(prev => {
             if (prev.some(c => c.id === newCol.id)) return prev;
@@ -138,36 +142,56 @@ export const Board: React.FC<BoardProps> = ({ initialBoardId }) => {
         });
     });
 
-    // 2. Coluna Atualizada (Título)
+    // 2. Coluna Renomeada por outro usuário
     socket.on('column_updated', ({ id, title }) => {
         setColumns(prev => prev.map(c => c.id === id ? { ...c, title } : c));
     });
 
-    // 3. Coluna Deletada
+    // 3. Coluna Excluída por outro usuário
     socket.on('column_deleted', ({ columnId }) => {
         setColumns(prev => prev.filter(c => c.id !== columnId));
     });
 
-    // 4. Coluna Movida (Sincroniza a ordem visual)
+    // 4. Coluna Movida por outro usuário
     socket.on('column_moved', ({ columnId, newPosition }) => {
         setColumns(prev => {
             const oldIndex = prev.findIndex(c => c.id === columnId);
             if (oldIndex === -1) return prev;
-            // Usa arrayMove do dnd-kit para garantir a mesma lógica visual
+            // Usa arrayMove do dnd-kit para animar a troca visualmente
             return arrayMove(prev, oldIndex, newPosition);
         });
     });
 
+    // --- EXPULSÃO / DELEÇÃO DO QUADRO ---
+    
+    socket.on('board_deleted', () => {
+        setExitModal({ 
+            title: 'Quadro Excluído', 
+            message: 'O dono deste quadro o excluiu permanentemente. Você precisa voltar ao início.' 
+        });
+        setSelectedCard(null);
+    });
+
+    socket.on('kicked_from_board', () => {
+        setExitModal({ 
+            title: 'Acesso Revogado', 
+            message: 'Você foi removido deste quadro por um administrador.' 
+        });
+        setSelectedCard(null);
+    });
+
     return () => {
         socket.emit('leave_board', currentBoardId);
+        // Limpa todos os ouvintes para não duplicar eventos
         socket.off('card_created'); socket.off('card_updated'); socket.off('card_moved'); socket.off('card_deleted');
         socket.off('column_created'); socket.off('column_updated'); socket.off('column_moved'); socket.off('column_deleted');
+        socket.off('board_deleted'); socket.off('kicked_from_board');
     };
   }, [currentBoardId, selectedCard]);
 
 
   // ============================================================
-  // DRAG AND DROP (MANTIDO)
+  // DRAG AND DROP HANDLERS (MANTIDOS)
   // ============================================================
 
   const customCollisionDetection: CollisionDetection = useCallback((args) => {
@@ -258,7 +282,7 @@ export const Board: React.FC<BoardProps> = ({ initialBoardId }) => {
 
       if (!over) return;
 
-      // COLUNAS
+      // COLUNAS (Agora emite e recebe socket)
       if (active.data.current?.type === 'COLUMN') {
           if (active.id !== over.id) {
               const oldIndex = columns.findIndex((col) => col.id === active.id);
@@ -266,7 +290,6 @@ export const Board: React.FC<BoardProps> = ({ initialBoardId }) => {
               setColumns((items) => arrayMove(items, oldIndex, newIndex));
               try { 
                 await api.patch(`/columns/${active.id}/move`, { newPosition: newIndex });
-                // Socket 'column_moved' virá depois, mas já atualizamos visualmente
               } catch (e) { fetchBoardData(); }
           }
           return;
@@ -308,7 +331,7 @@ export const Board: React.FC<BoardProps> = ({ initialBoardId }) => {
   };
 
   const handleDeleteColumn = async (columnId: string) => { 
-      try { await api.delete(`/columns/${columnId}`); } // O socket vai remover da tela
+      try { await api.delete(`/columns/${columnId}`); } 
       catch (e) { console.error(e); } 
   };
   
@@ -318,7 +341,6 @@ export const Board: React.FC<BoardProps> = ({ initialBoardId }) => {
   };
 
   const handleUpdateColumn = async (columnId: string, newTitle: string) => {
-      // Atualização otimista
       setColumns(prev => prev.map(col => col.id === columnId ? { ...col, title: newTitle } : col));
       try { await api.patch(`/columns/${columnId}`, { title: newTitle }); } catch (e) { fetchBoardData(); }
   };
@@ -339,61 +361,82 @@ export const Board: React.FC<BoardProps> = ({ initialBoardId }) => {
   };
 
   return (
-    <DndContext 
-        sensors={sensors} 
-        collisionDetection={customCollisionDetection} 
-        onDragStart={onDragStart} 
-        onDragOver={onDragOver} 
-        onDragEnd={onDragEnd}
-    >
-      <div id="board-container" 
-        className="flex h-full w-full overflow-x-auto overflow-y-hidden px-4 pb-4 pt-4 gap-6 scrollbar-thin 
-        bg-gray-50 dark:bg-transparent items-start transition-colors duration-300 relative"
-      >
-        <SortableContext items={columnsId} strategy={horizontalListSortingStrategy}>
-            {columns.map((col) => (
-            <Column 
-                key={col.id} 
-                column={col} 
-                onCreateCard={handleCreateCard} 
-                onDeleteColumn={handleDeleteColumn} 
-                onCardClick={(card) => setSelectedCard(card)} 
-                onUpdateColumn={handleUpdateColumn}
-            />
-            ))}
-        </SortableContext>
+    <>
+        <DndContext 
+            sensors={sensors} 
+            collisionDetection={customCollisionDetection} 
+            onDragStart={onDragStart} 
+            onDragOver={onDragOver} 
+            onDragEnd={onDragEnd}
+        >
+        <div id="board-container" 
+            className="flex h-full w-full overflow-x-auto overflow-y-hidden px-4 pb-4 pt-4 gap-6 scrollbar-thin 
+            bg-gray-50 dark:bg-transparent items-start transition-colors duration-300 relative"
+        >
+            <SortableContext items={columnsId} strategy={horizontalListSortingStrategy}>
+                {columns.map((col) => (
+                <Column 
+                    key={col.id} 
+                    column={col} 
+                    onCreateCard={handleCreateCard} 
+                    onDeleteColumn={handleDeleteColumn} 
+                    onCardClick={(card) => setSelectedCard(card)} 
+                    onUpdateColumn={handleUpdateColumn}
+                />
+                ))}
+            </SortableContext>
 
-        {isCreatingColumn ? (
-             <div className="bg-white dark:bg-[#161A1E] w-[280px] h-fit p-3 rounded-xl flex-shrink-0 shadow-xl border border-gray-200 dark:border-[#ffffff05] animate-in fade-in duration-200">
-                <input autoFocus value={newColumnTitle} onChange={(e) => setNewColumnTitle(e.target.value)} onKeyDown={(e) => { if(e.key === 'Enter') submitColumn(); if(e.key === 'Escape') setIsCreatingColumn(false); }} placeholder="Nome da lista..." className="w-full bg-gray-50 dark:bg-[#22272B] border border-gray-300 dark:border-gray-700 rounded px-3 py-2 text-sm text-gray-900 dark:text-white outline-none focus:border-rose-500 mb-2" />
-                <div className="flex items-center gap-2">
-                    <button onClick={submitColumn} className="bg-rose-600 hover:bg-rose-700 text-white text-sm font-medium py-1.5 px-3 rounded transition-colors">Adicionar</button>
-                    <button onClick={() => setIsCreatingColumn(false)} className="text-gray-400 hover:text-gray-600 dark:hover:text-white p-2">✕</button>
+            {isCreatingColumn ? (
+                <div className="bg-white dark:bg-[#161A1E] w-[280px] h-fit p-3 rounded-xl flex-shrink-0 shadow-xl border border-gray-200 dark:border-[#ffffff05] animate-in fade-in duration-200">
+                    <input autoFocus value={newColumnTitle} onChange={(e) => setNewColumnTitle(e.target.value)} onKeyDown={(e) => { if(e.key === 'Enter') submitColumn(); if(e.key === 'Escape') setIsCreatingColumn(false); }} placeholder="Nome da lista..." className="w-full bg-gray-50 dark:bg-[#22272B] border border-gray-300 dark:border-gray-700 rounded px-3 py-2 text-sm text-gray-900 dark:text-white outline-none focus:border-rose-500 mb-2" />
+                    <div className="flex items-center gap-2">
+                        <button onClick={submitColumn} className="bg-rose-600 hover:bg-rose-700 text-white text-sm font-medium py-1.5 px-3 rounded transition-colors">Adicionar</button>
+                        <button onClick={() => setIsCreatingColumn(false)} className="text-gray-400 hover:text-gray-600 dark:hover:text-white p-2">✕</button>
+                    </div>
                 </div>
-             </div>
-        ) : (
-            <button onClick={() => setIsCreatingColumn(true)} className="min-w-[300px] h-[fit-content] max-h-[50px] flex-shrink-0 bg-white/40 dark:bg-white/5 hover:bg-white/60 dark:hover:bg-white/10 backdrop-blur-sm rounded-xl flex items-center gap-2 px-4 py-3 text-gray-600 dark:text-gray-400 hover:text-gray-900 dark:hover:text-white transition-all border border-white/20 dark:border-white/5 shadow-sm group">
-                <span className="text-xl leading-none group-hover:scale-110 transition-transform">+</span>
-                <span className="font-medium text-sm">Adicionar outra lista</span>
-            </button>
+            ) : (
+                <button onClick={() => setIsCreatingColumn(true)} className="min-w-[300px] h-[fit-content] max-h-[50px] flex-shrink-0 bg-white/40 dark:bg-white/5 hover:bg-white/60 dark:hover:bg-white/10 backdrop-blur-sm rounded-xl flex items-center gap-2 px-4 py-3 text-gray-600 dark:text-gray-400 hover:text-gray-900 dark:hover:text-white transition-all border border-white/20 dark:border-white/5 shadow-sm group">
+                    <span className="text-xl leading-none group-hover:scale-110 transition-transform">+</span>
+                    <span className="font-medium text-sm">Adicionar outra lista</span>
+                </button>
+            )}
+        </div>
+
+        <DragOverlay dropAnimation={dropAnimation}>
+            {activeCard && <Card card={activeCard} onClick={() => {}} />}
+            {activeColumn && <Column column={activeColumn} onCardClick={()=>{}} />}
+        </DragOverlay>
+
+        {selectedCard && (
+            <CardModal 
+                isOpen={!!selectedCard} 
+                card={selectedCard} 
+                boardId={currentBoardId || ''} 
+                onClose={() => setSelectedCard(null)} 
+                onUpdateLocal={handleCardUpdate}
+                onDelete={() => handleDeleteCard(selectedCard.id, selectedCard.columnId)}
+            />
         )}
-      </div>
+        </DndContext>
 
-      <DragOverlay dropAnimation={dropAnimation}>
-        {activeCard && <Card card={activeCard} onClick={() => {}} />}
-        {activeColumn && <Column column={activeColumn} onCardClick={()=>{}} />}
-      </DragOverlay>
-
-      {selectedCard && (
-        <CardModal 
-            isOpen={!!selectedCard} 
-            card={selectedCard} 
-            boardId={currentBoardId || ''} 
-            onClose={() => setSelectedCard(null)} 
-            onUpdateLocal={handleCardUpdate}
-            onDelete={() => handleDeleteCard(selectedCard.id, selectedCard.columnId)}
-        />
-      )}
-    </DndContext>
+        {/* --- MODAL DE EXPULSÃO (BLOQUEIO) --- */}
+        {exitModal && (
+            <div className="fixed inset-0 z-[99999] flex items-center justify-center p-4 bg-black/80 backdrop-blur-md animate-in fade-in duration-300">
+                <div className="bg-white dark:bg-[#16181D] w-full max-w-sm p-8 rounded-3xl shadow-2xl border border-gray-100 dark:border-gray-800 text-center animate-in zoom-in-95">
+                    <div className="w-16 h-16 bg-red-100 dark:bg-red-900/30 rounded-full flex items-center justify-center mx-auto mb-6 text-red-600 dark:text-red-400">
+                        <svg className="w-8 h-8" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}><path strokeLinecap="round" strokeLinejoin="round" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" /></svg>
+                    </div>
+                    <h2 className="text-2xl font-black text-gray-900 dark:text-white mb-3">{exitModal.title}</h2>
+                    <p className="text-gray-500 dark:text-gray-400 text-sm mb-8 leading-relaxed">{exitModal.message}</p>
+                    <button 
+                        onClick={() => navigate('/')} 
+                        className="w-full bg-gray-900 dark:bg-white text-white dark:text-gray-900 font-bold py-4 rounded-2xl hover:scale-[1.02] active:scale-95 transition-all shadow-xl shadow-gray-200 dark:shadow-none"
+                    >
+                        Voltar para o Início
+                    </button>
+                </div>
+            </div>
+        )}
+    </>
   );
 };
