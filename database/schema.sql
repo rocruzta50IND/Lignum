@@ -119,3 +119,42 @@ CREATE TABLE notifications (
 CREATE INDEX idx_cards_column ON cards(column_id);
 CREATE INDEX idx_messages_board ON messages(board_id);
 CREATE INDEX idx_notifications_user ON notifications(user_id);
+
+-- Tabela de Etiquetas do Quadro
+CREATE TABLE labels (
+  id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+  board_id UUID REFERENCES boards(id) ON DELETE CASCADE,
+  title VARCHAR(50), -- Pode ser vazio (só a cor)
+  color VARCHAR(20) NOT NULL, -- Hex code ou nome da cor
+  created_at TIMESTAMP DEFAULT NOW()
+);
+
+-- Tabela de Relacionamento (Muitos-para-Muitos: Card <-> Label)
+CREATE TABLE card_labels (
+  card_id UUID REFERENCES cards(id) ON DELETE CASCADE,
+  label_id UUID REFERENCES labels(id) ON DELETE CASCADE,
+  PRIMARY KEY (card_id, label_id)
+);
+
+
+CREATE TABLE attachments (
+  id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+  card_id UUID REFERENCES cards(id) ON DELETE CASCADE,
+  file_name VARCHAR(255) NOT NULL, -- Nome original do arquivo
+  file_path VARCHAR(255) NOT NULL, -- Nome salvo no disco (único)
+  file_type VARCHAR(50), -- image/png, application/pdf, etc.
+  created_at TIMESTAMP DEFAULT NOW()
+);
+
+
+ALTER TABLE boards ADD COLUMN IF NOT EXISTS owner_id UUID;
+
+-- 1. Cria a coluna de criador (se não existir)
+ALTER TABLE cards ADD COLUMN IF NOT EXISTS criador_id UUID REFERENCES users(id);
+
+-- Define o criador como NULL para todos os cards que NÃO começam com "ROD"
+-- Assim, eles sumirão do seu filtro "Meus Cards"
+UPDATE cards 
+SET criador_id = NULL 
+WHERE title NOT LIKE 'ROD%';
+

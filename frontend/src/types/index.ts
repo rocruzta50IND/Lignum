@@ -35,7 +35,8 @@ export interface Card {
   hexColor?: string;
   checklist?: ChecklistItem[];
   comments?: Comment[];
-  labels?: Label[]; // <--- AQUI ESTÃO AS LABELS
+  labels?: Label[]; 
+  createdBy?: string;// <--- AQUI ESTÃO AS LABELS
 }
 
 export interface ColumnWithCards {

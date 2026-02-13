@@ -5,9 +5,11 @@ import type { Card as CardType } from '../../types';
 interface CardProps {
   card: CardType;
   onClick: (card: CardType) => void;
+  isFavorite: boolean; // NOVO
+  onToggleFavorite: (cardId: string) => void; // NOVO
 }
 
-export const Card = ({ card, onClick }: CardProps) => {
+export const Card = ({ card, onClick, isFavorite, onToggleFavorite }: CardProps) => {
   const { setNodeRef, attributes, listeners, transform, transition, isDragging } = useSortable({
     id: card.id,
     data: { type: 'CARD', card },
@@ -33,8 +35,6 @@ export const Card = ({ card, onClick }: CardProps) => {
   const checklistTotal = card.checklist?.length || 0;
   const hasComments = card.comments && card.comments.length > 0;
   const hasLabels = card.labels && card.labels.length > 0;
-
-  // --- DETECÇÃO DE ANEXOS (NOVO) ---
   const hasAttachments = card.attachments && card.attachments.length > 0;
   const attachmentsCount = card.attachments?.length || 0;
 
@@ -59,16 +59,32 @@ export const Card = ({ card, onClick }: CardProps) => {
           <div className="absolute left-0 top-0 bottom-0 w-1" style={{ backgroundColor: card.hexColor }}></div>
       )}
 
+      {/* --- BOTÃO FAVORITO (NOVO) --- */}
+      <button 
+        onClick={(e) => {
+            e.stopPropagation(); // Impede abrir o modal
+            onToggleFavorite(card.id);
+        }}
+        className={`absolute top-3 right-3 p-1.5 rounded-full transition-all z-10 
+            ${isFavorite 
+                ? 'text-yellow-400 bg-yellow-400/10 opacity-100' 
+                : 'text-gray-300 dark:text-gray-600 opacity-0 group-hover:opacity-100 hover:text-yellow-400 hover:bg-gray-100 dark:hover:bg-gray-800'
+            }`}
+      >
+        <svg className="w-4 h-4" fill={isFavorite ? "currentColor" : "none"} viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+            <path strokeLinecap="round" strokeLinejoin="round" d="M11.049 2.927c.3-.921 1.603-.921 1.902 0l1.519 4.674a1 1 0 00.95.69h4.915c.969 0 1.371 1.24.588 1.81l-3.976 2.888a1 1 0 00-.363 1.118l1.518 4.674c.3.922-.755 1.688-1.538 1.118l-3.976-2.888a1 1 0 00-1.176 0l-3.976 2.888c-.783.57-1.838-.197-1.538-1.118l1.518-4.674a1 1 0 00-.363-1.118l-3.976-2.888c-.784-.57-.38-1.81.588-1.81h4.914a1 1 0 00.951-.69l1.519-4.674z" />
+        </svg>
+      </button>
+
       <div className={card.hexColor && card.hexColor !== '#2C2C2C' ? 'pl-3' : ''}>
         
-        {/* Header: Prioridade + Drag Handle */}
+        {/* Header: Prioridade */}
         <div className="flex justify-between items-start mb-2.5">
             {card.priority && (
                 <span className={`text-[10px] font-bold uppercase tracking-wider px-2 py-0.5 rounded-md border ${priorityStyle}`}>
                     {card.priority}
                 </span>
             )}
-            <svg className="w-4 h-4 text-gray-300 dark:text-gray-600 opacity-0 group-hover:opacity-100 transition-opacity" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}><path strokeLinecap="round" strokeLinejoin="round" d="M12 5v.01M12 12v.01M12 19v.01M12 6a1 1 0 110-2 1 1 0 010 2zm0 7a1 1 0 110-2 1 1 0 010 2zm0 7a1 1 0 110-2 1 1 0 010 2z" /></svg>
         </div>
 
         {/* --- ETIQUETAS (LABELS) --- */}
@@ -88,7 +104,7 @@ export const Card = ({ card, onClick }: CardProps) => {
         )}
 
         {/* Título */}
-        <h4 className="text-[15px] font-bold text-gray-800 dark:text-gray-100 leading-snug mb-1.5">
+        <h4 className="text-[15px] font-bold text-gray-800 dark:text-gray-100 leading-snug mb-1.5 pr-6">
             {card.title}
         </h4>
         
@@ -123,7 +139,7 @@ export const Card = ({ card, onClick }: CardProps) => {
                 </div>
             )}
 
-            {/* --- ÍCONE DE ANEXO (NOVO) --- */}
+            {/* ÍCONE DE ANEXO */}
             {hasAttachments && (
                 <div className="flex items-center gap-1.5 text-blue-500 dark:text-blue-400">
                     <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}><path strokeLinecap="round" strokeLinejoin="round" d="M15.172 7l-6.586 6.586a2 2 0 102.828 2.828l6.414-6.586a4 4 0 00-5.656-5.656l-6.415 6.585a6 6 0 108.486 8.486L20.5 13" /></svg>
